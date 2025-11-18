@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data
+dataset/images/
+dataset/labels/
+dataset/insulators/
+*.tar
+*.tar.gz
+
+# Models (будут монтироваться как volume)
+models/*.pt
+
+# Notebooks
+notebooks/
+*.ipynb
+
+# Documentation
+*.md
+!README.md
+
+# Git
+.git/
+.gitignore
+
+# OS
+.DS_Store
+Thumbs.db
+

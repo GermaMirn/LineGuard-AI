@@ -1,0 +1,158 @@
+services:
+  # Инфраструктура (запускается первой)
+  postgres-db:
+    image: postgres:15
+    container_name: postgres-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postgres-db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_db_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  postgres-files:
+    image: postgres:15
+    container_name: postgres-files
+    environment:
+      POSTGRES_DB: ${POSTGRES_FILES_DB:-files_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_files_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Бэкенд сервисы
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+      target: production
+    container_name: auth-service
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-here}
+      - ALGORITHM=${ALGORITHM:-HS256}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres-db}
+      - DB_HOST=postgres-db
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  files-service:
+    build:
+      context: ./files-service
+      dockerfile: Dockerfile
+      target: production
+    container_name: files-service
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres-files:5432/${POSTGRES_FILES_DB:-files_db}
+      - STORAGE_PATH=/app/storage
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-10485760}
+    depends_on:
+      postgres-files:
+        condition: service_healthy
+    volumes:
+      - files_storage:/app/storage
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  yolov8-model-service:
+    build:
+      context: ./yolov8-model-service
+      dockerfile: Dockerfile
+    container_name: yolov8-model-service
+    volumes:
+      - ./models:/app/models
+    environment:
+      - MODEL_PATH=/app/models/best.pt
+      - PORT=8000
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  bff-service:
+    build:
+      context: ./bff-service
+      dockerfile: Dockerfile
+      target: production
+    container_name: bff-service
+    ports:
+      - "8000:8000"
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-here}
+      - ALGORITHM=${ALGORITHM:-HS256}
+      - AUTH_SERVICE_URL=http://auth-service:8002
+      - FILES_SERVICE_URL=http://files-service:8006
+      - YOLOV8_SERVICE_URL=http://yolov8-model-service:8000
+    depends_on:
+      - auth-service
+      - files-service
+      - yolov8-model-service
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Фронтенд (запускается после бэкенда)
+  frontend-service:
+    build:
+      context: ./frontend-service
+      dockerfile: Dockerfile
+      target: development
+    container_name: frontend-service
+    environment:
+      - VITE_BFF_SERVICE_URL=/api
+    depends_on:
+      - bff-service
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Nginx (запускается после фронтенда)
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./infrastructure/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - bff-service
+      - frontend-service
+    restart: unless-stopped
+    networks:
+      - app-network
+
+volumes:
+  postgres_db_data:
+  postgres_files_data:
+  files_storage:
+
+networks:
+  app-network:
+    driver: bridge

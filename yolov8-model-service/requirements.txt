@@ -1,0 +1,18 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+pydantic==2.5.0
+pydantic-settings==2.1.0
+pillow==10.1.0
+numpy==1.24.3
+ultralytics>=8.3.0
+torch>=2.0.0
+torchvision>=0.15.0
+requests==2.31.0
+# Поддержка RAW форматов дронов
+rawpy>=0.19.0
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.9
+# Для чтения метрик модели
+pyyaml>=6.0.1
+

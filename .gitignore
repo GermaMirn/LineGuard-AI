@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# Data (большие файлы)
+dataset/images/
+dataset/labels/
+dataset/insulators/
+*.tar
+*.tar.gz
+dataset_for_colab.tar.gz
+
+# Models (большие файлы)
+models/*.pt
+models/*.pth
+models/*.onnx
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Docker
+.docker/
+
+# Environment
+.env
+.env.local
+
