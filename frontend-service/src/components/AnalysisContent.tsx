@@ -4,6 +4,7 @@ import { Button, Progress } from "@heroui/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Virtuoso } from "react-virtuoso";
 import apiClient from "@/shared/api/axios";
+import AnalysisLoader from "./AnalysisLoader";
 
 
 const MAX_SIZE_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
@@ -37,18 +38,44 @@ interface AnalysisProgress {
   message?: string;
 }
 
-export default function AnalysisContent() {
+interface AnalysisContentProps {
+  onViewModeChange?: (isViewing: boolean) => void;
+}
+
+export default function AnalysisContent({ onViewModeChange }: AnalysisContentProps = {}) {
   const navigate = useNavigate();
   const [selectedFiles, setSelectedFiles] = useState<FileWithPreview[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confidenceThreshold] = useState(0.5);
-  const [selectedImageForModal, setSelectedImageForModal] = useState<FileWithPreview | null>(null);
+  const [selectedImageForView, setSelectedImageForView] = useState<FileWithPreview | null>(null);
+  const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Уведомляем родительский компонент об изменении режима просмотра
+  useEffect(() => {
+    if (onViewModeChange) {
+      onViewModeChange(selectedImageForView !== null);
+    }
+  }, [selectedImageForView, onViewModeChange]);
+
+  // Сохраняем функцию закрытия для использования извне
+  const closeView = useCallback(() => {
+    setSelectedImageForView(null);
+    setSelectedImageIndex(null);
+  }, []);
+
+  useEffect(() => {
+    // Сохраняем функцию закрытия в window для доступа из AnalysisPage
+    (window as any).__closeImageView = closeView;
+    return () => {
+      delete (window as any).__closeImageView;
+    };
+  }, [closeView]);
 
   // WebSocket подключение для получения статуса анализа
   useEffect(() => {
@@ -222,9 +249,34 @@ export default function AnalysisContent() {
 
   // Удаление файла
   const removeFile = useCallback((id: string) => {
-    setSelectedFiles((prev) => prev.filter((f) => f.id !== id));
+    setSelectedFiles((prev) => {
+      const newFiles = prev.filter((f) => f.id !== id);
+      // Если удаляем текущее изображение, закрываем просмотр или переключаемся на следующее
+      if (selectedImageForView?.id === id) {
+        const currentIndex = prev.findIndex(f => f.id === id);
+        if (newFiles.length > 0) {
+          const nextIndex = currentIndex < newFiles.length ? currentIndex : newFiles.length - 1;
+          setSelectedImageForView(newFiles[nextIndex]);
+          setSelectedImageIndex(nextIndex);
+        } else {
+          setSelectedImageForView(null);
+          setSelectedImageIndex(null);
+        }
+      }
+      return newFiles;
+    });
     setError(null);
-  }, []);
+  }, [selectedImageForView]);
+
+
+  // Открытие изображения для просмотра
+  const openImageForView = useCallback((file: FileWithPreview, index: number) => {
+    setSelectedImageForView(file);
+    setSelectedImageIndex(index);
+    if (!file.preview) {
+      loadPreview(file);
+    }
+  }, [loadPreview]);
 
 
   // Очистка всех файлов
@@ -309,6 +361,159 @@ export default function AnalysisContent() {
   const totalSizeMB = (totalSize / (1024 * 1024)).toFixed(2);
   const totalSizeGB = (totalSize / (1024 * 1024 * 1024)).toFixed(2);
 
+  // Если открыт просмотр - показываем только просмотр
+  if (selectedImageForView && selectedImageIndex !== null) {
+    return (
+      <div
+        className="h-full flex flex-col"
+        style={{ padding: '34px 96px 64px' }}
+      >
+        {/* Список миниатюр для навигации */}
+        {selectedFiles.length > 0 && (() => {
+          const itemWidth = 38;
+          const itemGap = 16;
+          const maxWidth = 528;
+          const calculatedWidth = selectedFiles.length * itemWidth + (selectedFiles.length - 1) * itemGap;
+          const containerWidth = Math.min(calculatedWidth, maxWidth);
+          const containerHeight = 38;
+
+          return (
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="relative"
+            >
+              {/* Список миниатюр по центру */}
+              <div className="flex justify-center ">
+                <div style={{ maxWidth: `${maxWidth}px`, width: `${containerWidth}px` }}>
+                  <div className="pb-4">
+                    <div
+                      className="no-scroll"
+                      style={{
+                        height: `${containerHeight}px`,
+                        width: `${containerWidth}px`,
+                        overflowX: selectedFiles.length > 10 ? 'auto' : 'hidden',
+                        overflowY: 'hidden',
+                        scrollbarWidth: 'none',
+                        msOverflowStyle: 'none',
+                      }}
+                    >
+                      <Virtuoso
+                        data={selectedFiles}
+                        totalCount={selectedFiles.length}
+                        style={{
+                          height: `${containerHeight}px`,
+                          width: '100%',
+                        }}
+                        horizontalDirection
+                        itemContent={(index) => {
+                          const fileWithPreview = selectedFiles[index];
+                          if (!fileWithPreview.preview) {
+                            setTimeout(() => loadPreview(fileWithPreview), 0);
+                          }
+                          return (
+                            <div
+                              style={{
+                                width: '38px',
+                                height: '38px',
+                                marginRight: '16px',
+                                flexShrink: 0,
+                                display: 'inline-block',
+                              }}
+                            >
+                              <div
+                                className={`relative w-[38px] h-[38px] overflow-hidden cursor-pointer hover:opacity-80 transition-all bg-white/10 flex items-center justify-center ${
+                                  selectedImageIndex === index ? 'ring-2 ring-white ring-offset-2 ring-offset-transparent' : ''
+                                }`}
+                                style={{ borderRadius: '8px' }}
+                                onClick={() => openImageForView(fileWithPreview, index)}
+                              >
+                                {fileWithPreview.preview ? (
+                                  <img
+                                    src={fileWithPreview.preview}
+                                    alt={fileWithPreview.file.name}
+                                    className="w-full h-full object-cover"
+                                    loading="lazy"
+                                    onError={() => {
+                                      loadPreview(fileWithPreview);
+                                    }}
+                                  />
+                                ) : (
+                                  <div className="text-white/40 text-xs text-center px-1">
+                                    {index + 1}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* Кнопка удаления в правом верхнем углу */}
+              {selectedImageForView && (
+                <button
+                  onClick={() => removeFile(selectedImageForView.id)}
+                  className="absolute top-1 right-0 z-10 h-[max-content] w-[max-content]"
+                  style={{ right: '-50px' }}
+                  aria-label="Удалить"
+                >
+                  <svg
+                    className="w-6 h-6 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                    />
+                  </svg>
+                </button>
+              )}
+            </motion.div>
+          );
+        })()}
+
+        {/* Просмотр фотки */}
+        <div className="flex-1 relative flex items-center justify-center">
+          {/* Изображение */}
+          {selectedImageForView.preview ? (
+            <img
+              src={selectedImageForView.preview}
+              alt={selectedImageForView.file.name}
+              className="max-w-full max-h-full object-contain rounded-lg mt-[-70px]"
+            />
+          ) : (
+            <div className="flex items-center justify-center text-white/60">
+              Загрузка изображения...
+            </div>
+          )}
+
+          {/* Информация о файле внизу */}
+          <div className="absolute bottom-0 left-0 right-0 p-4 bg-black/60 backdrop-blur-sm">
+            <p className="text-white text-xl font-medium truncate text-center">
+              {selectedImageForView.file.name}
+            </p>
+            <div className="flex items-center justify-center gap-4 mt-2">
+              <p className="text-white/60 text-base">
+                {(selectedImageForView.file.size / (1024 * 1024)).toFixed(2)} МБ
+              </p>
+              <p className="text-white/60 text-base">
+                {selectedImageIndex + 1} / {selectedFiles.length}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Состояние загрузки файлов (drag&drop)
   return (
     <div
       className="h-full flex flex-col"
@@ -330,6 +535,7 @@ export default function AnalysisContent() {
               const maxWidth = 528;
               const calculatedWidth = selectedFiles.length * itemWidth + (selectedFiles.length - 1) * itemGap;
               const containerWidth = Math.min(calculatedWidth, maxWidth);
+              const containerHeight = 38;
 
               return (
               <motion.div
@@ -341,7 +547,7 @@ export default function AnalysisContent() {
                   <div
                     className="no-scroll"
                     style={{
-                      height: '38px',
+                      height: `${containerHeight}px`,
                       width: `${containerWidth}px`,
                       overflowX: selectedFiles.length > 10 ? 'auto' : 'hidden',
                       overflowY: 'hidden',
@@ -353,7 +559,7 @@ export default function AnalysisContent() {
                       data={selectedFiles}
                       totalCount={selectedFiles.length}
                       style={{
-                        height: '38px',
+                        height: `${containerHeight}px`,
                         width: '100%',
                       }}
                       horizontalDirection
@@ -376,9 +582,15 @@ export default function AnalysisContent() {
                           }}
                         >
                           <div
-                            className="relative w-[38px] h-[38px] overflow-hidden cursor-pointer hover:opacity-80 transition-opacity bg-white/10 flex items-center justify-center"
-                            style={{ borderRadius: '8px' }}
-                            onClick={() => setSelectedImageForModal(fileWithPreview)}
+                            className={`relative overflow-hidden cursor-pointer hover:opacity-80 transition-all bg-white/10 flex items-center justify-center ${
+                              selectedImageIndex === index ? 'ring-2 ring-white ring-offset-2 ring-offset-transparent' : ''
+                            }`}
+                            style={{
+                              borderRadius: '8px',
+                              width: selectedImageIndex === index ? '48px' : '38px',
+                              height: selectedImageIndex === index ? '48px' : '38px',
+                            }}
+                            onClick={() => openImageForView(fileWithPreview, index)}
                           >
                             {fileWithPreview.preview ? (
                               <img
@@ -453,19 +665,25 @@ export default function AnalysisContent() {
                   animate={{ opacity: 1, y: 0 }}
                   className="flex flex-col items-center gap-[24px]"
                 >
-                  {/* Иконка папки с плюсом */}
+                  {/* Иконка папки с плюсом или лоадер */}
                   <div className="relative">
-                    <img
-                      src="/images/new-folder.svg"
-                      alt="new-folder"
-                    />
+                    {loading || analysisProgress ? (
+                      <AnalysisLoader />
+                    ) : (
+                      <img
+                        src="/images/new-folder.svg"
+                        alt="new-folder"
+                      />
+                    )}
                   </div>
 
                   <div className="flex flex-col items-center gap-[10px]">
                     {/* Заголовок */}
-                    <h2 className="text-3xl font-bold text-white">
-                      {loading || analysisProgress ? 'Идет анализ...' : 'Загрузите данные'}
-                    </h2>
+                    {!(loading || analysisProgress) && (
+                      <h2 className="text-3xl font-bold text-white">
+                        Загрузите данные
+                      </h2>
+                    )}
 
                     {/* Описание */}
                     <p className="text-white/70 text-base max-w-md leading-tight w-[300px]">
@@ -479,8 +697,8 @@ export default function AnalysisContent() {
                   {/* Кнопка загрузки */}
                   {!(loading || analysisProgress) && (
                     <Button
-                      className="bg-white text-black rounded-full whitespace-nowrap flex items-center justify-center gap-[4px]"
-                      style={{ padding: '7px 16px 11px 16px', fontWeight: 550 }}
+                      className="text-white rounded-[8px] whitespace-nowrap flex items-center justify-center gap-[4px] border border-white/60"
+                      style={{ padding: '11px 12.5px', fontWeight: 550 }}
                       onClick={(e) => {
                         e.stopPropagation();
                         fileInputRef.current?.click();
@@ -488,7 +706,7 @@ export default function AnalysisContent() {
                     >
                       <img src="/images/plus.svg" alt="plus" className="mr-2" />
                       <p className="text-base font-medium">
-                        {selectedFiles.length > 0 ? 'Дозагрузить файлы' : 'Загрузить данные'}
+                        {selectedFiles.length > 0 ? 'Доприкрепить файлы' : 'Прикрепить файлы'}
                       </p>
                     </Button>
                   )}
@@ -500,18 +718,21 @@ export default function AnalysisContent() {
                   className="flex flex-col items-center gap-4"
                 >
                   <div className="relative">
-                    <img
-                      src="/images/new-folder.svg"
-                      alt="new-folder"
-                    />
+                    {loading || analysisProgress ? (
+                      <AnalysisLoader />
+                    ) : (
+                      <img
+                        src="/images/new-folder.svg"
+                        alt="new-folder"
+                      />
+                    )}
                   </div>
 
-                  <p className="text-xl font-semibold text-white">
-                    {loading || analysisProgress
-                      ? 'Идет анализ...'
-                      : `Загружено ${selectedFiles.length} ${selectedFiles.length === 1 ? 'изображение' : selectedFiles.length < 5 ? 'изображения' : 'изображений'}`
-                    }
-                  </p>
+                  {!(loading || analysisProgress) && (
+                    <p className="text-xl font-semibold text-white">
+                      Загружено {selectedFiles.length} {selectedFiles.length === 1 ? 'изображение' : selectedFiles.length < 5 ? 'изображения' : 'изображений'}
+                    </p>
+                  )}
                   {analysisProgress && (
                     <div className="space-y-1">
                       <p className="text-white/80 text-sm">
@@ -537,8 +758,8 @@ export default function AnalysisContent() {
                       </p>
                       <div className="flex gap-4 mt-4">
                         <Button
-                          className="bg-white text-black rounded-full whitespace-nowrap flex items-center justify-center gap-[4px]"
-                          style={{ padding: '7px 16px 11px 16px', fontWeight: 550 }}
+                          className="text-white rounded-[8px] whitespace-nowrap flex items-center justify-center gap-[4px] border border-white/60"
+                          style={{ padding: '11px 12.5px', fontWeight: 550 }}
                           onClick={(e) => {
                             e.stopPropagation();
                             fileInputRef.current?.click();
@@ -550,8 +771,8 @@ export default function AnalysisContent() {
                           </p>
                         </Button>
                         <Button
-                          className="bg-white text-black rounded-full whitespace-nowrap flex items-center justify-center gap-[4px]"
-                          style={{ padding: '7px 16px 11px 16px', fontWeight: 550 }}
+                          className="text-white rounded-[8px] whitespace-nowrap flex items-center justify-center gap-[4px] border border-white/60"
+                          style={{ padding: '11px 12.5px', fontWeight: 550 }}
                           onClick={(e) => {
                             e.stopPropagation();
                             clearFiles();
@@ -626,90 +847,7 @@ export default function AnalysisContent() {
         </div>
       )}
 
-      {/* Модалка с изображением */}
-      <AnimatePresence>
-        {selectedImageForModal && (
-          <>
-            <ModalImagePreview
-              fileWithPreview={selectedImageForModal}
-              loadPreview={loadPreview}
-              onClose={() => setSelectedImageForModal(null)}
-            />
-          </>
-        )}
-      </AnimatePresence>
     </div>
-  );
-}
-
-// Компонент модалки с изображением
-function ModalImagePreview({
-  fileWithPreview,
-  loadPreview,
-  onClose
-}: {
-  fileWithPreview: FileWithPreview;
-  loadPreview: (file: FileWithPreview) => void;
-  onClose: () => void;
-}) {
-  // Загружаем превью при открытии модалки
-  useEffect(() => {
-    if (!fileWithPreview.preview) {
-      loadPreview(fileWithPreview);
-    }
-  }, [fileWithPreview, loadPreview]);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <motion.div
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.9, opacity: 0 }}
-        transition={{ duration: 0.2 }}
-        className="relative max-w-7xl max-h-[90vh] bg-black/90 rounded-xl overflow-hidden border border-white/20"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Кнопка закрытия */}
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 z-10 w-10 h-10 bg-black/60 hover:bg-black/80 rounded-full flex items-center justify-center transition-colors"
-          aria-label="Закрыть"
-        >
-          <span className="text-white text-2xl font-bold">×</span>
-        </button>
-
-        {/* Изображение */}
-        <div className="p-4">
-          {fileWithPreview.preview ? (
-            <img
-              src={fileWithPreview.preview}
-              alt={fileWithPreview.file.name}
-              className="max-w-full max-h-[80vh] object-contain mx-auto rounded-lg"
-            />
-          ) : (
-            <div className="flex items-center justify-center h-[400px] text-white/60">
-              Загрузка изображения...
-            </div>
-          )}
-        </div>
-
-        {/* Название файла */}
-        <div className="px-4 pb-4 text-center">
-          <p className="text-white text-sm font-medium truncate max-w-md mx-auto">
-            {fileWithPreview.file.name}
-          </p>
-          <p className="text-white/60 text-xs mt-1">
-            {(fileWithPreview.file.size / (1024 * 1024)).toFixed(2)} МБ
-          </p>
-        </div>
-      </motion.div>
-    </motion.div>
   );
 }
 

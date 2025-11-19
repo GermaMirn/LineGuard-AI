@@ -255,9 +255,16 @@ async def process_task(payload: Dict[str, Any], exchange) -> None:
     try:
         # Используем ZIP_DEFLATED с поддержкой UTF-8 для имен файлов
         with zipfile.ZipFile(tmp_results.name, "w", compression=zipfile.ZIP_DEFLATED) as results_zip:
-            # Включаем поддержку UTF-8 для имен файлов
-            # Python 3.11+ поддерживает UTF-8 по умолчанию, но для совместимости явно указываем
-            pass
+            # Создаем обе папки заранее (даже если они будут пустыми)
+            damaged_folder = zipfile.ZipInfo("results/Поврежденные/")
+            damaged_folder.flag_bits |= 0x800
+            damaged_folder.compress_type = zipfile.ZIP_DEFLATED
+            results_zip.writestr(damaged_folder, b"")
+
+            normal_folder = zipfile.ZipInfo("results/Неповрежденные/")
+            normal_folder.flag_bits |= 0x800
+            normal_folder.compress_type = zipfile.ZIP_DEFLATED
+            results_zip.writestr(normal_folder, b"")
 
             # Обрабатываем превью файлы (первые 10, уже в БД)
             for image in preview_images:
@@ -279,8 +286,14 @@ async def process_task(payload: Dict[str, Any], exchange) -> None:
                     detections = result.get("detections", [])
                     annotated_bytes = draw_annotations(original_bytes, detections)
                     annotated_name = f"{Path(safe_name).stem}_annotated.jpg"
+
+                    # Определяем папку в зависимости от наличия дефектов
+                    has_defects = result.get("has_defects", False)
+                    folder_name = "Поврежденные" if has_defects else "Неповрежденные"
+                    zip_path = f"results/{folder_name}/{annotated_name}"
+
                     # Используем ZipInfo для правильной кодировки UTF-8
-                    zip_info = zipfile.ZipInfo(annotated_name)
+                    zip_info = zipfile.ZipInfo(zip_path)
                     # Устанавливаем флаг UTF-8 (0x800) для поддержки кириллицы в именах файлов
                     zip_info.flag_bits |= 0x800
                     zip_info.compress_type = zipfile.ZIP_DEFLATED
@@ -385,8 +398,14 @@ async def process_task(payload: Dict[str, Any], exchange) -> None:
                     detections = result.get("detections", [])
                     annotated_bytes = draw_annotations(original_bytes, detections)
                     annotated_name = f"{Path(safe_name).stem}_annotated.jpg"
+
+                    # Определяем папку в зависимости от наличия дефектов
+                    has_defects = result.get("has_defects", False)
+                    folder_name = "Поврежденные" if has_defects else "Неповрежденные"
+                    zip_path = f"results/{folder_name}/{annotated_name}"
+
                     # Используем ZipInfo для правильной кодировки UTF-8
-                    zip_info = zipfile.ZipInfo(annotated_name)
+                    zip_info = zipfile.ZipInfo(zip_path)
                     # Устанавливаем флаг UTF-8 (0x800) для поддержки кириллицы в именах файлов
                     zip_info.flag_bits |= 0x800
                     zip_info.compress_type = zipfile.ZIP_DEFLATED

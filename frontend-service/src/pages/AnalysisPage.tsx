@@ -7,6 +7,21 @@ import HistoryContent from "@/components/HistoryContent";
 import AnalysisHistoryContents from "@/components/AnalysisHistoryContents";
 import apiClient from "@/shared/api/axios";
 
+interface TaskImageResponse {
+  id: string;
+  file_id: string;
+  file_name: string;
+  file_size: number;
+  status: string;
+  is_preview: boolean;
+  summary?: any;
+  result_file_id?: string | null;
+  error_message?: string | null;
+  created_at: string;
+  original_url: string;
+  result_url?: string | null;
+}
+
 export default function AnalysisPage() {
   const [searchParams] = useSearchParams();
   const currentModel = searchParams.get('model') || 'analysis';
@@ -17,6 +32,9 @@ export default function AnalysisPage() {
   const [results, setResults] = useState<any>(null);
   const [processedFilesCount, setProcessedFilesCount] = useState<number>(0);
   const [resultsArchiveFileId, setResultsArchiveFileId] = useState<string | null>(null);
+  const [taskImages, setTaskImages] = useState<TaskImageResponse[]>([]);
+  const [taskImagesTotal, setTaskImagesTotal] = useState<number>(0);
+  const [isViewingImage, setIsViewingImage] = useState(false);
 
   useEffect(() => {
     if (!taskId) {
@@ -28,8 +46,21 @@ export default function AnalysisPage() {
         setLoading(true);
         setError(null);
 
-        const response = await apiClient.get(`/analysis/tasks/${taskId}`);
-        const taskData = response.data;
+        const [taskResponse, imagesResponse] = await Promise.all([
+          apiClient.get(`/analysis/tasks/${taskId}`),
+          apiClient.get(`/analysis/tasks/${taskId}/images`, {
+            params: {
+              skip: 0,
+              limit: 50,
+            },
+          }),
+        ]);
+
+        const taskData = taskResponse.data;
+        const imagesData = imagesResponse.data as {
+          images: TaskImageResponse[];
+          total: number;
+        };
 
         // Преобразуем данные задачи в формат Results для отображения
         if (taskData.metadata) {
@@ -48,6 +79,8 @@ export default function AnalysisPage() {
           if (taskData.results_archive_file_id) {
             setResultsArchiveFileId(taskData.results_archive_file_id);
           }
+          setTaskImages(imagesData?.images || []);
+          setTaskImagesTotal(imagesData?.total || 0);
         } else {
           setError("Метаданные задачи не найдены");
         }
@@ -97,14 +130,42 @@ export default function AnalysisPage() {
         className="transition-all duration-300 flex flex-col items-center py-6 w-24 pt-[47px] pb-[47px]"
         style={{ borderRight: '1px solid rgba(255, 255, 255, 0.1)' }}
       >
-        {/* Логотип вверху */}
-        <img
-          src="/images/logo-small.svg"
-          alt="LineGuard AI"
-          onError={(e) => {
-            e.currentTarget.style.display = 'none';
-          }}
-        />
+        {/* Логотип вверху или стрелка назад */}
+        {isViewingImage && currentModel === 'analysis' && !taskId ? (
+          <button
+            onClick={() => {
+              setIsViewingImage(false);
+              // Вызываем функцию закрытия просмотра из AnalysisContent
+              if ((window as any).__closeImageView) {
+                (window as any).__closeImageView();
+              }
+            }}
+            className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+            aria-label="Назад"
+          >
+            <svg
+              className="w-6 h-6 text-white"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15 19l-7-7 7-7"
+              />
+            </svg>
+          </button>
+        ) : (
+          <img
+            src="/images/logo-small.svg"
+            alt="LineGuard AI"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none';
+            }}
+          />
+        )}
 
         {/* Пустое пространство для центрирования навигации */}
         <div className="flex-1"></div>
@@ -218,10 +279,16 @@ export default function AnalysisPage() {
               results={results}
               processedFilesCount={processedFilesCount}
               resultsArchiveFileId={resultsArchiveFileId}
+              images={taskImages}
+              totalImages={taskImagesTotal}
             />
           ) : null
         ) : (
-          currentModel === 'analysis' ? <AnalysisContent /> : <HistoryContent />
+          currentModel === 'analysis' ? (
+            <AnalysisContent onViewModeChange={setIsViewingImage} />
+          ) : (
+            <HistoryContent />
+          )
         )}
       </div>
     </div>

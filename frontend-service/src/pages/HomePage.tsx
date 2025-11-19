@@ -113,9 +113,7 @@ export default function HomePage() {
                 border: '1px solid #FFFFFF',
                 borderRadius: '8px',
                 color: '#FFFFFF',
-                fontWeight: 650,
-                boxShadow: 'inset 0 0 15px rgba(255, 255, 255, 0.2), inset 0 0 10px rgba(255, 255, 255, 0.5), 0 0 10px rgb(0, 0, 0)',
-                textShadow: '0 0 10px rgba(255, 255, 255, 0.8), 0 0 20px rgba(255, 255, 255, 0.7)'
+                fontWeight: 650
               }}
               radius="full"
             >
