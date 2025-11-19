@@ -14,6 +14,17 @@ class Settings(BaseSettings):
     FILES_SERVICE_URL: str = "http://files-service:8006"
     YOLOV8_SERVICE_URL: str = "http://yolov8-model-service:8000"
 
+    # Аналитика / задачи (используем общую БД postgres-db)
+    ANALYSIS_DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@postgres-db:5432/postgres-db"
+    RABBITMQ_URL: str = "amqp://guest:guest@rabbitmq:5672/"
+    ANALYSIS_QUEUE_NAME: str = "analysis_tasks"
+    ANALYSIS_UPDATES_EXCHANGE: str = "analysis_updates"
+    MAX_BATCH_FILES: int = 50000
+    MAX_BATCH_SIZE_BYTES: int = 10 * 1024 * 1024 * 1024  # 10 GB
+    PREVIEW_LIMIT: int = 10
+    MAX_YOLO_FILE_SIZE_MB: int = 512
+    UPLOAD_PREVIEW_LIMIT: int = 10  # Сколько файлов сохранять как превью при загрузке
+
     class Config:
         env_file = ".env"
 

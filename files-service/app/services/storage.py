@@ -49,7 +49,11 @@ class StorageService:
             "XSD_SCHEMA": settings.ALLOWED_XSD_EXTENSIONS,
             "TEST_DATA": settings.ALLOWED_TEST_DATA_EXTENSIONS,
             "VM_TEMPLATE": settings.ALLOWED_VM_EXTENSIONS,
-            "IMAGE": settings.ALLOWED_IMAGE_EXTENSIONS,
+            "IMAGE": settings.ALLOWED_IMAGE_EXTENSIONS.union(settings.ALLOWED_RAW_EXTENSIONS),
+            "ANALYSIS_ORIGINAL": settings.ALLOWED_IMAGE_EXTENSIONS.union(settings.ALLOWED_RAW_EXTENSIONS),
+            "ANALYSIS_RESULT": settings.ALLOWED_ANALYSIS_RESULT_EXTENSIONS,
+            "ANALYSIS_PREVIEW": settings.ALLOWED_ANALYSIS_PREVIEW_EXTENSIONS,
+            "ANALYSIS_ARCHIVE": settings.ALLOWED_ANALYSIS_ARCHIVE_EXTENSIONS,
         }
 
         if file_ext not in allowed_extensions.get(file_type, set()):

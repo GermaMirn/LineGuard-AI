@@ -1,303 +1,453 @@
-import { useState, useRef, useEffect } from "react";
-import { Button, Progress, Chip } from "@heroui/react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
+import { Button, Progress } from "@heroui/react";
 import { motion, AnimatePresence } from "framer-motion";
+import { Virtuoso } from "react-virtuoso";
 import apiClient from "@/shared/api/axios";
 
-const CLASS_NAMES_RU: Record<string, string> = {
-  vibration_damper: "Виброгаситель",
-  festoon_insulators: "Гирлянда изоляторов",
-  traverse: "Траверса",
-  bad_insulator: "Изолятор отсутствует",
-  damaged_insulator: "Поврежденный изолятор",
-  polymer_insulators: "Полимерные изоляторы",
-};
 
-const DEFECT_CLASSES = ["bad_insulator", "damaged_insulator"];
+const MAX_SIZE_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
+const SUPPORTED_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/tiff",
+  "image/tif",
+  "image/bmp",
+  "image/dng",
+  "image/raw",
+  "image/nef",
+  "image/cr2",
+  "image/arw",
+];
 
-interface DefectSummary {
-  type: string;
-  severity: string;
-  description: string;
+interface FileWithPreview {
+  file: File;
+  preview: string | null;
+  id: string;
 }
 
-interface BboxSize {
-  width: number;
-  height: number;
-  area: number;
-  is_small: boolean;
-}
-
-interface Detection {
-  class: string;
-  class_ru: string;
-  confidence: number;
-  bbox: number[];
-  bbox_size: BboxSize;
-  defect_summary: DefectSummary;
-}
-
-interface Results {
-  total_objects: number;
-  defects_count: number;
-  has_defects: boolean;
-  statistics: Record<string, number>;
-  detections: Detection[];
+interface AnalysisProgress {
+  task_id: string;
+  status: string;
+  processed_files: number;
+  total_files: number;
+  failed_files: number;
+  defects_found: number;
+  message?: string;
 }
 
 export default function AnalysisContent() {
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const [selectedFiles, setSelectedFiles] = useState<FileWithPreview[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState<Results | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confidenceThreshold, setConfidenceThreshold] = useState(0.35);
-  const [selectedClasses, setSelectedClasses] = useState<string[]>([]);
+  const [confidenceThreshold] = useState(0.5);
+  const [selectedImageForModal, setSelectedImageForModal] = useState<FileWithPreview | null>(null);
+  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const imageRef = useRef<HTMLImageElement>(null);
 
-  const allClasses = results?.detections
-    ? [...new Set(results.detections.map((d: Detection) => d.class))]
-    : [];
-
-  const filteredDetections = results?.detections
-    ? selectedClasses.length === 0
-      ? results.detections
-      : results.detections.filter((d) => selectedClasses.includes(d.class))
-    : [];
-
+  // WebSocket подключение для получения статуса анализа
   useEffect(() => {
-    if (results && imageRef.current && canvasRef.current) {
-      drawBoundingBoxes();
-    }
-  }, [results, selectedClasses]);
+    if (!currentTaskId) return;
 
-  useEffect(() => {
-    const handleResize = () => {
-      if (results && imageRef.current && canvasRef.current) {
-        setTimeout(() => {
-          drawBoundingBoxes();
-        }, 100);
+    const BFF_SERVICE_URL = (import.meta as any).env?.VITE_BFF_SERVICE_URL || "/api";
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProtocol}//${window.location.host}${BFF_SERVICE_URL}/ws/tasks/${currentTaskId}`;
+
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log('WebSocket connected to:', wsUrl);
+    };
+
+    ws.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data) as AnalysisProgress;
+        console.log('WebSocket message received:', data);
+        setAnalysisProgress(data);
+
+        // Если анализ завершен или провалился, перенаправляем на страницу результатов
+        // Статус приходит в нижнем регистре: 'completed', 'failed', 'processing'
+        const statusUpper = data.status?.toUpperCase();
+        if (statusUpper === 'COMPLETED' || statusUpper === 'FAILED') {
+          setLoading(false);
+
+          // Перенаправляем на страницу результатов с task_id
+          const taskIdToLoad = data.task_id || currentTaskId;
+          if (statusUpper === 'COMPLETED' && taskIdToLoad) {
+            // Перенаправляем на страницу с результатами
+            navigate(`/panel?model=analysis&task_id=${taskIdToLoad}`);
+          } else if (statusUpper === 'FAILED') {
+            setError('Анализ завершился с ошибкой');
+          }
+
+          ws.close();
+          wsRef.current = null;
+          setCurrentTaskId(null);
+        }
+      } catch (err) {
+        console.error('Error parsing WebSocket message:', err);
       }
     };
 
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, [results]);
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      console.error('WebSocket URL was:', wsUrl);
+    };
 
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      setSelectedFile(file);
-      previewImage(file);
-      setError(null);
-      setResults(null);
+    ws.onclose = (event) => {
+      console.log('WebSocket disconnected:', {
+        code: event.code,
+        reason: event.reason,
+        wasClean: event.wasClean,
+        url: wsUrl
+      });
+      wsRef.current = null;
+    };
+
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, [currentTaskId]);
+
+  // Валидация файлов
+  const validateFiles = useCallback((files: File[]): string | null => {
+    // Проверка типа файлов
+    const supportedExtensions = ['.jpg', '.jpeg', '.png', '.tiff', '.tif', '.bmp', '.dng', '.raw', '.nef', '.cr2', '.arw'];
+
+    for (const file of files) {
+      const fileExtension = '.' + file.name.toLowerCase().split('.').pop();
+      const hasValidExtension = supportedExtensions.includes(fileExtension);
+      const hasValidMimeType = file.type.startsWith('image/') || SUPPORTED_IMAGE_TYPES.includes(file.type);
+
+      if (!hasValidExtension && !hasValidMimeType) {
+        return `Файл "${file.name}" не является изображением. Разрешены только изображения.`;
+      }
+    }
+
+    // Проверка размера
+    const currentTotalSize = selectedFiles.reduce((sum, f) => sum + f.file.size, 0);
+    const newFilesSize = files.reduce((sum, f) => sum + f.size, 0);
+    const totalSize = currentTotalSize + newFilesSize;
+
+    if (totalSize > MAX_SIZE_BYTES) {
+      const totalSizeGB = (totalSize / (1024 * 1024 * 1024)).toFixed(2);
+      return `Суммарный размер файлов (${totalSizeGB} ГБ) превышает максимально допустимый размер 10 ГБ.`;
+    }
+
+    return null;
+  }, [selectedFiles]);
+
+  // Создание превью для файла
+  const createPreview = useCallback((file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
+  // Создание превью для конкретного файла (ленивая загрузка)
+  const loadPreview = useCallback(async (fileWithPreview: FileWithPreview) => {
+    if (fileWithPreview.preview) {
+      return; // Превью уже создано
+    }
+
+    try {
+      const preview = await createPreview(fileWithPreview.file);
+      setSelectedFiles((prev) =>
+        prev.map((f) =>
+          f.id === fileWithPreview.id ? { ...f, preview } : f
+        )
+      );
+    } catch (error) {
+      console.error('Error creating preview:', error);
+    }
+  }, [createPreview]);
+
+  // Обработка добавления файлов (без создания превью сразу)
+  const addFiles = useCallback((files: File[]) => {
+    const validationError = validateFiles(files);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    setError(null);
+
+    // Создаем файлы БЕЗ превью (ленивая загрузка)
+    const filesWithPreviews: FileWithPreview[] = files.map((file) => ({
+      file,
+      preview: null,
+      id: `${file.name}-${file.size}-${Date.now()}-${Math.random()}`,
+    }));
+
+    setSelectedFiles((prev) => [...prev, ...filesWithPreviews]);
+
+    // Создаем превью только для первых 20 файлов (для быстрого отображения)
+    const filesToPreview = filesWithPreviews.slice(0, 20);
+    filesToPreview.forEach((fileWithPreview) => {
+      loadPreview(fileWithPreview);
+    });
+  }, [validateFiles, loadPreview]);
+
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length > 0) {
+      await addFiles(files);
+    }
+    // Сбрасываем input для возможности повторной загрузки тех же файлов
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
-  const handleDrop = (event: React.DragEvent) => {
+  const handleDrop = async (event: React.DragEvent) => {
     event.preventDefault();
     setIsDragging(false);
-    const file = event.dataTransfer.files[0];
-    if (file && file.type.startsWith("image/")) {
-      setSelectedFile(file);
-      previewImage(file);
-      setError(null);
-      setResults(null);
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length > 0) {
+      await addFiles(files);
     }
   };
 
-  const previewImage = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      setImagePreview(e.target?.result as string);
-    };
-    reader.readAsDataURL(file);
-  };
+  // Удаление файла
+  const removeFile = useCallback((id: string) => {
+    setSelectedFiles((prev) => prev.filter((f) => f.id !== id));
+    setError(null);
+  }, []);
 
-  const analyzeImage = async () => {
-    if (!selectedFile) return;
+
+  // Очистка всех файлов
+  const clearFiles = useCallback(() => {
+    setSelectedFiles([]);
+    setError(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, []);
+
+  // Валидация перед анализом
+  const validateBeforeAnalysis = useCallback((): string | null => {
+    if (selectedFiles.length === 0) {
+      return "Пожалуйста, загрузите хотя бы одно изображение";
+    }
+
+    const totalSize = selectedFiles.reduce((sum, f) => sum + f.file.size, 0);
+    if (totalSize > MAX_SIZE_BYTES) {
+      const totalSizeGB = (totalSize / (1024 * 1024 * 1024)).toFixed(2);
+      return `Суммарный размер файлов (${totalSizeGB} ГБ) превышает максимально допустимый размер 10 ГБ.`;
+    }
+
+    return null;
+  }, [selectedFiles]);
+
+  const analyzeImages = async () => {
+    const validationError = validateBeforeAnalysis();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    if (selectedFiles.length === 0) return;
 
     setLoading(true);
     setError(null);
-    setResults(null);
+    setAnalysisProgress(null);
 
     try {
       const formData = new FormData();
-      formData.append("file", selectedFile);
+      selectedFiles.forEach((fileWithPreview) => {
+        formData.append("files", fileWithPreview.file);
+      });
 
       const response = await apiClient.post(
-        `/predict?conf=${confidenceThreshold}`,
+        `/predict/batch?conf=${confidenceThreshold}`,
         formData,
         {
           headers: {
             "Content-Type": "multipart/form-data",
           },
-          timeout: 60000,
+          timeout: 300000, // 5 минут для batch обработки
         }
       );
 
-      setResults(response.data as Results);
-      const detections = (response.data as Results).detections || [];
-      const newAllClasses = [...new Set(detections.map((d: Detection) => d.class))];
-      setSelectedClasses(newAllClasses);
+      // Для batch API возвращается task_id, подключаемся к WebSocket
+      if (response.data.task_id) {
+        setCurrentTaskId(response.data.task_id);
+        // WebSocket подключение произойдет автоматически через useEffect
+      } else {
+        // Если это не batch API, показываем ошибку
+        setError('Ожидается batch API с task_id');
+        setLoading(false);
+      }
     } catch (err: any) {
       setError(
-        err.response?.data?.detail || err.message || "Ошибка при обработке изображения"
+        err.response?.data?.detail || err.message || "Ошибка при обработке изображений"
       );
       console.error("Error:", err);
-    } finally {
       setLoading(false);
     }
   };
 
-  const clearFile = () => {
-    setSelectedFile(null);
-    setImagePreview(null);
-    setResults(null);
-    setError(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-  };
 
-  const isDefect = (className: string) => {
-    return DEFECT_CLASSES.includes(className);
-  };
 
-  const drawBoundingBoxes = () => {
-    if (!results || !results.detections || !canvasRef.current || !imageRef.current) {
-      return;
-    }
+  // Вычисляем общий размер файлов
+  const totalSize = useMemo(() => {
+    return selectedFiles.reduce((sum, f) => sum + f.file.size, 0);
+  }, [selectedFiles]);
 
-    const img = imageRef.current;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-
-    if (!ctx || !img.complete) {
-      return;
-    }
-
-    if (img.naturalWidth === 0 || img.naturalHeight === 0) {
-      return;
-    }
-
-    const imgRect = img.getBoundingClientRect();
-    const displayWidth = imgRect.width;
-    const displayHeight = imgRect.height;
-
-    canvas.width = displayWidth;
-    canvas.height = displayHeight;
-    canvas.style.width = `${displayWidth}px`;
-    canvas.style.height = `${displayHeight}px`;
-    canvas.style.position = "absolute";
-    canvas.style.top = "0px";
-    canvas.style.left = "0px";
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const scaleX = displayWidth / img.naturalWidth;
-    const scaleY = displayHeight / img.naturalHeight;
-
-    const colors: Record<string, string> = {
-      vibration_damper: "#3B82F6",
-      festoon_insulators: "#10B981",
-      traverse: "#8B5CF6",
-      bad_insulator: "#EF4444",
-      damaged_insulator: "#F59E0B",
-      polymer_insulators: "#06B6D4",
-    };
-
-    filteredDetections.forEach((detection) => {
-      const [x1, y1, x2, y2] = detection.bbox;
-      const defect = isDefect(detection.class);
-      const color = colors[detection.class] || "#666666";
-
-      const scaledX1 = x1 * scaleX;
-      const scaledY1 = y1 * scaleY;
-      const scaledX2 = x2 * scaleX;
-      const scaledY2 = y2 * scaleY;
-      const width = scaledX2 - scaledX1;
-      const height = scaledY2 - scaledY1;
-
-      ctx.strokeStyle = color;
-      ctx.lineWidth = defect ? 4 : 3;
-      ctx.setLineDash(defect ? [8, 4] : []);
-      ctx.strokeRect(scaledX1, scaledY1, width, height);
-
-      const label = defect
-        ? `${detection.class_ru} · ${detection.defect_summary?.type || "дефект"}`
-        : detection.class_ru;
-      const text = `${label} ${(detection.confidence * 100).toFixed(0)}%`;
-      ctx.font = "bold 16px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-      const textMetrics = ctx.measureText(text);
-      const textWidth = textMetrics.width;
-      const textHeight = 24;
-      const padding = 8;
-
-      ctx.fillStyle = color;
-      ctx.globalAlpha = 0.9;
-      ctx.fillRect(
-        scaledX1,
-        Math.max(0, scaledY1 - textHeight),
-        textWidth + padding * 2,
-        textHeight
-      );
-      ctx.globalAlpha = 1.0;
-
-      ctx.fillStyle = "white";
-      ctx.fillText(
-        text,
-        scaledX1 + padding,
-        Math.max(textHeight - 5, scaledY1 - 5)
-      );
-
-      if (defect) {
-        ctx.fillStyle = color;
-        ctx.globalAlpha = 0.2;
-        ctx.fillRect(scaledX1, scaledY1, width, height);
-        ctx.globalAlpha = 1.0;
-      }
-    });
-  };
+  const totalSizeMB = (totalSize / (1024 * 1024)).toFixed(2);
+  const totalSizeGB = (totalSize / (1024 * 1024 * 1024)).toFixed(2);
 
   return (
-    <div className="h-full flex items-center justify-center" style={{ padding: '128px 96px' }}>
+    <div
+      className="h-full flex flex-col"
+      style={{ padding: selectedFiles.length > 0 ? '34px 96px 64px' : '128px 96px' }}
+    >
       <AnimatePresence mode="wait">
-        {!results ? (
-          <motion.div
-            key="upload"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.3 }}
-            className="w-full h-full"
-          >
+        <motion.div
+          key="upload"
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.95 }}
+          transition={{ duration: 0.3 }}
+          className="w-full h-full flex flex-col gap-6"
+        >
+            {/* Загруженные изображения над drag and drop */}
+            {selectedFiles.length > 0 && (() => {
+              const itemWidth = 38;
+              const itemGap = 16;
+              const maxWidth = 528;
+              const calculatedWidth = selectedFiles.length * itemWidth + (selectedFiles.length - 1) * itemGap;
+              const containerWidth = Math.min(calculatedWidth, maxWidth);
+
+              return (
+              <motion.div
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                style={{ maxWidth: `${maxWidth}px`, width: `${containerWidth}px`, margin: '0 auto' }}
+              >
+                <div className="pb-4">
+                  <div
+                    className="no-scroll"
+                    style={{
+                      height: '38px',
+                      width: `${containerWidth}px`,
+                      overflowX: selectedFiles.length > 10 ? 'auto' : 'hidden',
+                      overflowY: 'hidden',
+                      scrollbarWidth: 'none',
+                      msOverflowStyle: 'none',
+                    }}
+                  >
+                    <Virtuoso
+                      data={selectedFiles}
+                      totalCount={selectedFiles.length}
+                      style={{
+                        height: '38px',
+                        width: '100%',
+                      }}
+                      horizontalDirection
+                      itemContent={(index) => {
+                      const fileWithPreview = selectedFiles[index];
+
+                      // Загружаем превью для видимых элементов
+                      if (!fileWithPreview.preview) {
+                        setTimeout(() => loadPreview(fileWithPreview), 0);
+                      }
+
+                      return (
+                        <div
+                          style={{
+                            width: '38px',
+                            height: '38px',
+                            marginRight: '16px',
+                            flexShrink: 0,
+                            display: 'inline-block',
+                          }}
+                        >
+                          <div
+                            className="relative w-[38px] h-[38px] overflow-hidden cursor-pointer hover:opacity-80 transition-opacity bg-white/10 flex items-center justify-center"
+                            style={{ borderRadius: '8px' }}
+                            onClick={() => setSelectedImageForModal(fileWithPreview)}
+                          >
+                            {fileWithPreview.preview ? (
+                              <img
+                                src={fileWithPreview.preview}
+                                alt={fileWithPreview.file.name}
+                                className="w-full h-full object-cover"
+                                loading="lazy"
+                                onError={() => {
+                                  loadPreview(fileWithPreview);
+                                }}
+                              />
+                            ) : (
+                              <div className="text-white/40 text-xs text-center px-1">
+                                {index + 1}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+              );
+            })()}
+
             {/* Drop Zone */}
             <div
-              className={`relative border-2 border-dashed rounded-2xl text-center cursor-pointer transition-all duration-300 w-full h-full flex items-center justify-center ${
-                isDragging
-                  ? "border-white bg-white/5 scale-[1.01]"
-                  : "border-white/30 hover:border-white/50 hover:bg-white/5"
+              className={`relative border-2 border-dashed rounded-2xl text-center transition-all duration-300 flex-1 flex items-center justify-center ${
+                loading || analysisProgress
+                  ? "border-white/20 bg-white/5 cursor-not-allowed opacity-50"
+                  : isDragging
+                  ? "border-white bg-white/5 scale-[1.01] cursor-pointer"
+                  : "border-white/30 hover:border-white/50 hover:bg-white/5 cursor-pointer"
               }`}
+              style={{
+                padding: selectedFiles.length > 0
+                  ? '48px 96px 48px 96px'  // Когда загружены документы
+                  : '134px 96px 170px 96px'  // До загрузки данных
+              }}
               onDragOver={(e) => {
+                if (loading || analysisProgress) return;
                 e.preventDefault();
                 setIsDragging(true);
               }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
+              onDragLeave={() => {
+                if (loading || analysisProgress) return;
+                setIsDragging(false);
+              }}
+              onDrop={(e) => {
+                if (loading || analysisProgress) return;
+                handleDrop(e);
+              }}
+              onClick={() => {
+                if (loading || analysisProgress) return;
+                fileInputRef.current?.click();
+              }}
             >
               <input
                 ref={fileInputRef}
                 type="file"
+                multiple
                 onChange={handleFileSelect}
-                accept="image/jpeg,image/jpg,image/png,image/tiff"
+                accept="image/jpeg,image/jpg,image/png,image/tiff,image/tif,image/bmp,image/dng,image/raw,image/nef,image/cr2,image/arw"
                 className="hidden"
               />
 
-              {!selectedFile ? (
+              {selectedFiles.length === 0 ? (
                 <motion.div
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -314,7 +464,7 @@ export default function AnalysisContent() {
                   <div className="flex flex-col items-center gap-[10px]">
                     {/* Заголовок */}
                     <h2 className="text-3xl font-bold text-white">
-                      Загрузите данные
+                      {loading || analysisProgress ? 'Идет анализ...' : 'Загрузите данные'}
                     </h2>
 
                     {/* Описание */}
@@ -327,19 +477,21 @@ export default function AnalysisContent() {
                   </div>
 
                   {/* Кнопка загрузки */}
-                  <Button
-                    className="bg-white text-black rounded-full whitespace-nowrap flex items-center justify-center gap-[4px]"
-                    style={{ padding: '7px 16px 11px 16px', fontWeight: 550 }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      fileInputRef.current?.click();
-                    }}
-                  >
-                    <img src="/images/plus.svg" alt="plus" className="mr-2" />
-                    <p className="text-base font-medium">
-                      Загрузить данные
-                    </p>
-                  </Button>
+                  {!(loading || analysisProgress) && (
+                    <Button
+                      className="bg-white text-black rounded-full whitespace-nowrap flex items-center justify-center gap-[4px]"
+                      style={{ padding: '7px 16px 11px 16px', fontWeight: 550 }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        fileInputRef.current?.click();
+                      }}
+                    >
+                      <img src="/images/plus.svg" alt="plus" className="mr-2" />
+                      <p className="text-base font-medium">
+                        {selectedFiles.length > 0 ? 'Дозагрузить файлы' : 'Загрузить данные'}
+                      </p>
+                    </Button>
+                  )}
                 </motion.div>
               ) : (
                 <motion.div
@@ -347,57 +499,74 @@ export default function AnalysisContent() {
                   animate={{ opacity: 1, scale: 1 }}
                   className="flex flex-col items-center gap-4"
                 >
-                  <div className="text-6xl">✅</div>
-                  <p className="text-xl font-semibold text-white">{selectedFile.name}</p>
-                  <p className="text-white/60">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</p>
-                  <div className="flex gap-4 mt-4">
-                    <Button
-                      className="bg-white text-black font-medium px-6 py-3 rounded-lg hover:bg-white/90"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        analyzeImage();
-                      }}
-                      isLoading={loading}
-                      disabled={loading}
-                    >
-                      {loading ? "Обработка..." : "Начать анализ"}
-                    </Button>
-                    <Button
-                      variant="bordered"
-                      className="border-white/30 text-white font-medium px-6 py-3 rounded-lg hover:bg-white/10"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        clearFile();
-                      }}
-                    >
-                      Очистить
-                    </Button>
+                  <div className="relative">
+                    <img
+                      src="/images/new-folder.svg"
+                      alt="new-folder"
+                    />
                   </div>
+
+                  <p className="text-xl font-semibold text-white">
+                    {loading || analysisProgress
+                      ? 'Идет анализ...'
+                      : `Загружено ${selectedFiles.length} ${selectedFiles.length === 1 ? 'изображение' : selectedFiles.length < 5 ? 'изображения' : 'изображений'}`
+                    }
+                  </p>
+                  {analysisProgress && (
+                    <div className="space-y-1">
+                      <p className="text-white/80 text-sm">
+                        Обработано: {analysisProgress.processed_files} / {analysisProgress.total_files}
+                      </p>
+                      {analysisProgress.total_files > 0 && (
+                        <p className="text-white/60 text-xs">
+                          Осталось: {analysisProgress.total_files - analysisProgress.processed_files} файлов
+                          {analysisProgress.failed_files > 0 && ` · Ошибок: ${analysisProgress.failed_files}`}
+                        </p>
+                      )}
+                      {analysisProgress.defects_found > 0 && (
+                        <p className="text-white/60 text-xs">
+                          Найдено дефектов: {analysisProgress.defects_found}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {!(loading || analysisProgress) && (
+                    <>
+                      <p className="text-white/60">
+                        Размер: {totalSizeGB >= '1' ? `${totalSizeGB} ГБ` : `${totalSizeMB} МБ`}
+                      </p>
+                      <div className="flex gap-4 mt-4">
+                        <Button
+                          className="bg-white text-black rounded-full whitespace-nowrap flex items-center justify-center gap-[4px]"
+                          style={{ padding: '7px 16px 11px 16px', fontWeight: 550 }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            fileInputRef.current?.click();
+                          }}
+                        >
+                          <img src="/images/plus.svg" alt="plus" className="mr-2" />
+                          <p className="text-base font-medium">
+                            Дозагрузить файлы
+                          </p>
+                        </Button>
+                        <Button
+                          className="bg-white text-black rounded-full whitespace-nowrap flex items-center justify-center gap-[4px]"
+                          style={{ padding: '7px 16px 11px 16px', fontWeight: 550 }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            clearFiles();
+                          }}
+                        >
+                          <p className="text-base font-medium">
+                            Очистить
+                          </p>
+                        </Button>
+                      </div>
+                    </>
+                  )}
                 </motion.div>
               )}
             </div>
-
-            {/* Настройки (показываются только если файл выбран) */}
-            {selectedFile && !loading && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="mt-6 p-6 bg-white/5 rounded-xl border border-white/10"
-              >
-                <label className="block text-white/80 mb-3 font-medium">
-                  Порог уверенности: {(confidenceThreshold * 100).toFixed(0)}%
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={confidenceThreshold}
-                  onChange={(e) => setConfidenceThreshold(parseFloat(e.target.value))}
-                  className="w-full h-2 bg-white/20 rounded-lg appearance-none cursor-pointer accent-white"
-                />
-              </motion.div>
-            )}
 
             {/* Индикатор загрузки */}
             {loading && (
@@ -416,239 +585,35 @@ export default function AnalysisContent() {
                 <p className="text-white/70 mt-4">Обработка изображения...</p>
               </motion.div>
             )}
-          </motion.div>
-        ) : (
-          <motion.div
-            key="results"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.3 }}
-            className="w-full max-w-7xl p-8"
-          >
-            {/* Результаты */}
-            <div className="space-y-8">
-              {/* Заголовок результатов */}
-              <div className="text-center mb-8">
-                <h2 className="text-4xl font-bold mb-4 text-white">
-                  ✅ Результаты детекции
-                </h2>
-                {results.has_defects && (
-                  <div className="inline-block p-4 bg-yellow-500/20 border border-yellow-500/50 rounded-lg">
-                    <p className="text-yellow-300 font-semibold flex items-center gap-2">
-                      <span className="text-2xl">⚠️</span>
-                      <span>
-                        Обнаружены дефекты! Найдено {results.defects_count}{" "}
-                        {results.defects_count === 1 ? "дефектный объект" : "дефектных объекта"}.
-                      </span>
-                    </p>
-                  </div>
-                )}
-              </div>
 
-              {/* Изображение с детекциями */}
-              <div className="mb-8">
-                <div className="relative rounded-xl overflow-hidden border border-white/20 bg-black/50 p-4">
-                  <div className="relative w-full flex justify-center items-center">
-                    <img
-                      ref={imageRef}
-                      src={imagePreview || ""}
-                      alt="Result"
-                      className="max-w-full h-auto object-contain block rounded-lg"
-                      onLoad={() => {
-                        setTimeout(drawBoundingBoxes, 50);
-                      }}
-                    />
-                    <canvas
-                      ref={canvasRef}
-                      className="absolute top-0 left-0 pointer-events-none"
-                      style={{
-                        imageRendering: "crisp-edges",
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Статистика */}
-              <div className="mb-8">
-                <h3 className="text-2xl font-bold mb-6 text-center text-white">
-                  📊 Статистика объектов
-                </h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="text-center p-6 rounded-xl bg-white/5 border border-white/10">
-                    <div className="text-4xl mb-3">📦</div>
-                    <h4 className="text-sm font-bold text-white/60 mb-3 uppercase">
-                      Всего объектов
-                    </h4>
-                    <div className="text-4xl font-extrabold text-white">
-                      {results.total_objects}
-                    </div>
-                  </div>
-                  <div className={`text-center p-6 rounded-xl border ${
-                    results.has_defects
-                      ? "bg-red-500/10 border-red-500/30"
-                      : "bg-green-500/10 border-green-500/30"
-                  }`}>
-                    <div className="text-4xl mb-3">
-                      {results.has_defects ? "⚠️" : "✅"}
-                    </div>
-                    <h4 className="text-sm font-bold text-white/60 mb-3 uppercase">
-                      Дефектов
-                    </h4>
-                    <div className={`text-4xl font-extrabold ${
-                      results.has_defects ? "text-red-400" : "text-green-400"
-                    }`}>
-                      {results.defects_count}
-                    </div>
-                  </div>
-                  <div className="text-center p-6 rounded-xl bg-white/5 border border-white/10">
-                    <div className="text-4xl mb-3">🔧</div>
-                    <h4 className="text-sm font-bold text-white/60 mb-3 uppercase">
-                      Виброгасителей
-                    </h4>
-                    <div className="text-4xl font-extrabold text-white">
-                      {results.statistics.vibration_damper || 0}
-                    </div>
-                  </div>
-                  <div className="text-center p-6 rounded-xl bg-white/5 border border-white/10">
-                    <div className="text-4xl mb-3">⚡</div>
-                    <h4 className="text-sm font-bold text-white/60 mb-3 uppercase">
-                      Изоляторов
-                    </h4>
-                    <div className="text-4xl font-extrabold text-white">
-                      {(results.statistics.festoon_insulators || 0) +
-                        (results.statistics.polymer_insulators || 0)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Детекции */}
-              {results.detections && results.detections.length > 0 && (
-                <div className="mt-8">
-                  <h3 className="text-2xl font-bold mb-6 text-white">
-                    🔍 Детекции
-                  </h3>
-
-                  <div className="mb-6">
-                    <label className="block mb-3 font-bold text-lg text-white/80">
-                      Фильтр по категориям:
-                    </label>
-                    <div className="flex flex-wrap gap-3">
-                      {allClasses.map((className) => (
-                        <Chip
-                          key={className}
-                          variant={selectedClasses.includes(className) ? "solid" : "bordered"}
-                          onClick={() => {
-                            if (selectedClasses.includes(className)) {
-                              setSelectedClasses(
-                                selectedClasses.filter((c) => c !== className)
-                              );
-                            } else {
-                              setSelectedClasses([...selectedClasses, className]);
-                            }
-                          }}
-                          className="cursor-pointer text-base px-4 py-2 font-semibold transition-all border-white/30 text-white"
-                          style={{
-                            backgroundColor: selectedClasses.includes(className)
-                              ? 'rgba(255, 255, 255, 0.2)'
-                              : 'transparent'
-                          }}
-                        >
-                          {CLASS_NAMES_RU[className] || className}
-                        </Chip>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="overflow-x-auto rounded-xl border border-white/20 bg-black/50">
-                    <table className="w-full border-collapse">
-                      <thead className="bg-white/5">
-                        <tr>
-                          <th className="text-left p-4 font-bold text-white text-sm">
-                            Категория
-                          </th>
-                          <th className="text-left p-4 font-bold text-white text-sm">
-                            Признак дефекта
-                          </th>
-                          <th className="text-left p-4 font-bold text-white text-sm">
-                            Уверенность
-                          </th>
-                          <th className="text-left p-4 font-bold text-white text-sm">
-                            Координаты
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredDetections.map((detection, index) => (
-                          <tr
-                            key={index}
-                            className="border-b border-white/10 hover:bg-white/5 transition-colors"
-                          >
-                            <td className="p-4">
-                              <span className={`px-3 py-1 rounded text-sm font-semibold ${
-                                isDefect(detection.class)
-                                  ? "bg-red-500/20 text-red-300"
-                                  : "bg-green-500/20 text-green-300"
-                              }`}>
-                                {detection.class_ru}
-                              </span>
-                            </td>
-                            <td className="p-4">
-                              <div className="flex flex-col gap-2">
-                                <span className="text-white/80 font-semibold">
-                                  {detection.defect_summary?.type || "Норма"}
-                                </span>
-                                <p className="text-sm text-white/60">
-                                  {detection.defect_summary?.description ||
-                                    "Признаков дефекта не обнаружено"}
-                                </p>
-                              </div>
-                            </td>
-                            <td className="p-4">
-                              <div className="flex items-center gap-2">
-                                <span className="font-bold text-white">
-                                  {(detection.confidence * 100).toFixed(1)}%
-                                </span>
-                                <div className="w-24 h-2 bg-white/20 rounded-full overflow-hidden">
-                                  <div
-                                    className={`h-full ${
-                                      detection.confidence > 0.7
-                                        ? "bg-green-500"
-                                        : detection.confidence > 0.5
-                                        ? "bg-yellow-500"
-                                        : "bg-red-500"
-                                    }`}
-                                    style={{ width: `${detection.confidence * 100}%` }}
-                                  />
-                                </div>
-                              </div>
-                            </td>
-                            <td className="p-4 text-sm text-white/60 font-mono bg-white/5 rounded">
-                              [{detection.bbox.map((c) => Math.round(c)).join(", ")}]
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {/* Кнопка возврата */}
-              <div className="mt-8 text-center">
+            {/* Кнопка "Начать анализ" */}
+            {selectedFiles.length > 0 && !loading && !analysisProgress && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mt-6 flex justify-center"
+              >
                 <Button
-                  variant="bordered"
-                  className="border-white/30 text-white font-medium px-6 py-3 rounded-lg hover:bg-white/10"
-                  onClick={clearFile}
+                  size="lg"
+                  className="text-white font-bold text-lg rounded-full hover:scale-105 transition-all duration-300 flex items-center justify-center border border-white/60 h-[42px]"
+                  radius="full"
+                  style={{
+                    padding: '13px 12px',
+                    backgroundColor: 'rgba(88, 75, 255, 0.4)',
+                    fontWeight: 400
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    analyzeImages();
+                  }}
+                  disabled={loading || selectedFiles.length === 0}
                 >
-                  Загрузить новое изображение
+                  <img src="/images/ai-point.svg" alt="AI Point" />
+                  Начать анализ
                 </Button>
-              </div>
-            </div>
+              </motion.div>
+            )}
           </motion.div>
-        )}
       </AnimatePresence>
 
       {/* Ошибка */}
@@ -660,7 +625,91 @@ export default function AnalysisContent() {
           </p>
         </div>
       )}
+
+      {/* Модалка с изображением */}
+      <AnimatePresence>
+        {selectedImageForModal && (
+          <>
+            <ModalImagePreview
+              fileWithPreview={selectedImageForModal}
+              loadPreview={loadPreview}
+              onClose={() => setSelectedImageForModal(null)}
+            />
+          </>
+        )}
+      </AnimatePresence>
     </div>
+  );
+}
+
+// Компонент модалки с изображением
+function ModalImagePreview({
+  fileWithPreview,
+  loadPreview,
+  onClose
+}: {
+  fileWithPreview: FileWithPreview;
+  loadPreview: (file: FileWithPreview) => void;
+  onClose: () => void;
+}) {
+  // Загружаем превью при открытии модалки
+  useEffect(() => {
+    if (!fileWithPreview.preview) {
+      loadPreview(fileWithPreview);
+    }
+  }, [fileWithPreview, loadPreview]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.9, opacity: 0 }}
+        transition={{ duration: 0.2 }}
+        className="relative max-w-7xl max-h-[90vh] bg-black/90 rounded-xl overflow-hidden border border-white/20"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Кнопка закрытия */}
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 z-10 w-10 h-10 bg-black/60 hover:bg-black/80 rounded-full flex items-center justify-center transition-colors"
+          aria-label="Закрыть"
+        >
+          <span className="text-white text-2xl font-bold">×</span>
+        </button>
+
+        {/* Изображение */}
+        <div className="p-4">
+          {fileWithPreview.preview ? (
+            <img
+              src={fileWithPreview.preview}
+              alt={fileWithPreview.file.name}
+              className="max-w-full max-h-[80vh] object-contain mx-auto rounded-lg"
+            />
+          ) : (
+            <div className="flex items-center justify-center h-[400px] text-white/60">
+              Загрузка изображения...
+            </div>
+          )}
+        </div>
+
+        {/* Название файла */}
+        <div className="px-4 pb-4 text-center">
+          <p className="text-white text-sm font-medium truncate max-w-md mx-auto">
+            {fileWithPreview.file.name}
+          </p>
+          <p className="text-white/60 text-xs mt-1">
+            {(fileWithPreview.file.size / (1024 * 1024)).toFixed(2)} МБ
+          </p>
+        </div>
+      </motion.div>
+    </motion.div>
   );
 }
 

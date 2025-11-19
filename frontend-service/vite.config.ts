@@ -24,6 +24,15 @@ export default defineConfig({
     watch: {
       usePolling: true,
     },
+    proxy: {
+      // Прокси для API запросов к BFF сервису в Docker
+      "/api": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+        secure: false,
+        ws: true, // Поддержка WebSocket для /api/ws/*
+      },
+    },
   },
 });
 

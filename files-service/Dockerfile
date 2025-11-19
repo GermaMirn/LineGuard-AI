@@ -25,9 +25,9 @@ USER app
 
 # Development stage
 FROM base AS development
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8006", "--reload"]
+CMD alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8006 --reload
 
 # Production stage
 FROM base AS production
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8006"]
+CMD alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8006
 

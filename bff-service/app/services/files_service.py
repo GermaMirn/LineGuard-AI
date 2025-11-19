@@ -68,6 +68,47 @@ class FilesService:
                 detail=f"Failed to upload file: {str(e)}"
             )
 
+    async def upload_bytes(
+        self,
+        *,
+        data: bytes,
+        filename: str,
+        content_type: str,
+        project_id: str,
+        file_type: str,
+        uploaded_by: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Загрузить файл из байтового буфера."""
+        try:
+            files = {
+                "file": (filename, data, content_type),
+            }
+            payload = {
+                "project_id": project_id,
+                "file_type": file_type,
+            }
+            if uploaded_by:
+                payload["uploaded_by"] = uploaded_by
+
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.files_service_url}/files/upload",
+                    files=files,
+                    data=payload,
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail=f"Files service error: {e.response.text}",
+            )
+        except httpx.RequestError as e:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Cannot connect to files service: {str(e)}",
+            )
+
     async def download_file(self, file_id: str) -> bytes:
         """Скачать файл через files-service"""
         try:

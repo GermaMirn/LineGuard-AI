@@ -1,10 +1,68 @@
+import { useState, useEffect } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { Progress } from "@heroui/react";
+import { motion } from "framer-motion";
 import AnalysisContent from "@/components/AnalysisContent";
 import HistoryContent from "@/components/HistoryContent";
+import AnalysisHistoryContents from "@/components/AnalysisHistoryContents";
+import apiClient from "@/shared/api/axios";
 
 export default function AnalysisPage() {
   const [searchParams] = useSearchParams();
   const currentModel = searchParams.get('model') || 'analysis';
+  const taskId = searchParams.get('task_id');
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<any>(null);
+  const [processedFilesCount, setProcessedFilesCount] = useState<number>(0);
+  const [resultsArchiveFileId, setResultsArchiveFileId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!taskId) {
+      return;
+    }
+
+    const loadTaskData = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const response = await apiClient.get(`/analysis/tasks/${taskId}`);
+        const taskData = response.data;
+
+        // Преобразуем данные задачи в формат Results для отображения
+        if (taskData.metadata) {
+          const metadata = taskData.metadata;
+          const resultsData = {
+            total_objects: metadata.total_objects || 0,
+            defects_count: metadata.defects_found || 0,
+            has_defects: (metadata.defects_found || 0) > 0,
+            statistics: metadata.class_stats || {},
+            detections: [], // Для batch анализа детекции в архиве
+          };
+          setResults(resultsData);
+          setProcessedFilesCount(taskData.processed_files || 0);
+
+          // Сохраняем ID архива с результатами для скачивания
+          if (taskData.results_archive_file_id) {
+            setResultsArchiveFileId(taskData.results_archive_file_id);
+          }
+        } else {
+          setError("Метаданные задачи не найдены");
+        }
+      } catch (err: any) {
+        console.error("Error loading task data:", err);
+        setError(
+          err.response?.data?.detail || "Не удалось загрузить данные задачи"
+        );
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadTaskData();
+  }, [taskId]);
 
   return (
     <div className="h-screen bg-black text-white flex overflow-hidden relative">
@@ -36,7 +94,7 @@ export default function AnalysisPage() {
 
       {/* Левая боковая панель */}
       <div
-        className="transition-all duration-300 flex flex-col items-center py-6 w-24"
+        className="transition-all duration-300 flex flex-col items-center py-6 w-24 pt-[47px] pb-[47px]"
         style={{ borderRight: '1px solid rgba(255, 255, 255, 0.1)' }}
       >
         {/* Логотип вверху */}
@@ -124,7 +182,47 @@ export default function AnalysisPage() {
 
       {/* Основная область */}
       <div className="flex-1 relative overflow-auto">
-        {currentModel === 'analysis' ? <AnalysisContent /> : <HistoryContent />}
+        {taskId ? (
+          loading ? (
+            <div className="h-full flex items-center justify-center">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="text-center"
+              >
+                <Progress
+                  isIndeterminate
+                  aria-label="Загрузка данных"
+                  className="max-w-md mx-auto"
+                  color="primary"
+                  size="lg"
+                />
+                <p className="text-white/70 mt-4">Загрузка данных задачи...</p>
+              </motion.div>
+            </div>
+          ) : error ? (
+            <div className="h-full flex items-center justify-center">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="p-6 bg-red-500/20 border border-red-500/50 rounded-xl max-w-md"
+              >
+                <p className="text-red-300 font-semibold flex items-center gap-2">
+                  <span className="text-2xl">❌</span>
+                  <span>Ошибка: {error}</span>
+                </p>
+              </motion.div>
+            </div>
+          ) : results ? (
+            <AnalysisHistoryContents
+              results={results}
+              processedFilesCount={processedFilesCount}
+              resultsArchiveFileId={resultsArchiveFileId}
+            />
+          ) : null
+        ) : (
+          currentModel === 'analysis' ? <AnalysisContent /> : <HistoryContent />
+        )}
       </div>
     </div>
   );

@@ -35,3 +35,55 @@ code {
     monospace;
 }
 
+.no-scroll {
+  overflow-y: hidden !important; /* Скрывает вертикальную прокрутку */
+  overflow-x: auto !important; /* Разрешает горизонтальную прокрутку */
+  /* Скрываем скроллбар для всех браузеров */
+  scrollbar-width: none !important; /* Firefox */
+  -ms-overflow-style: none !important; /* IE и Edge */
+}
+
+.no-scroll::-webkit-scrollbar {
+  display: none !important; /* Chrome, Safari, Opera */
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.no-scroll::-webkit-scrollbar-track {
+  display: none !important;
+}
+
+.no-scroll::-webkit-scrollbar-thumb {
+  display: none !important;
+}
+
+/* Скрываем скроллбар для всех дочерних элементов */
+.no-scroll *,
+.no-scroll * * {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+.no-scroll *::-webkit-scrollbar,
+.no-scroll * *::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+
+.no-scroll *::-webkit-scrollbar-track,
+.no-scroll * *::-webkit-scrollbar-track {
+  display: none !important;
+}
+
+.no-scroll *::-webkit-scrollbar-thumb,
+.no-scroll * *::-webkit-scrollbar-thumb {
+  display: none !important;
+}
+
+.no-scroll > * {
+  overflow-y: hidden !important;
+  max-height: 38px;
+}
+

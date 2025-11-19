@@ -11,6 +11,10 @@ class FileType(str, enum.Enum):
     TEST_DATA = "TEST_DATA"
     VM_TEMPLATE = "VM_TEMPLATE"
     IMAGE = "IMAGE"
+    ANALYSIS_ORIGINAL = "ANALYSIS_ORIGINAL"
+    ANALYSIS_PREVIEW = "ANALYSIS_PREVIEW"
+    ANALYSIS_RESULT = "ANALYSIS_RESULT"
+    ANALYSIS_ARCHIVE = "ANALYSIS_ARCHIVE"
 
 class File(Base):
     __tablename__ = "files"

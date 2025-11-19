@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, status, UploadFile, File, Form
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 import io
 from app.schemas.files import FileUploadResponse, FileResponse, FileListResponse, FileType
 from app.services.files_service import FilesService
@@ -44,19 +44,29 @@ async def upload_file(
 
 @router.get("/{file_id}/download")
 async def download_file(
-    file_id: str,
-    current_user: dict = Depends(get_current_user)
+    file_id: str
 ):
-    """Скачать файл по ID"""
+    """Скачать файл по ID (без авторизации для результатов анализа)"""
     try:
         metadata = await files_service.get_file_metadata(file_id)
         file_content = await files_service.download_file(file_id)
 
-        return StreamingResponse(
-            io.BytesIO(file_content),
-            media_type=metadata.get("mime_type", "application/octet-stream"),
+        file_name = metadata.get("file_name", "file.zip")
+        mime_type = metadata.get("mime_type", "application/zip")
+        file_size = len(file_content)
+
+        # Используем Response вместо StreamingResponse для лучшей совместимости с Safari
+        # И добавляем все необходимые заголовки
+        return Response(
+            content=file_content,
+            media_type=mime_type,
             headers={
-                "Content-Disposition": f'attachment; filename="{metadata.get("file_name")}"'
+                "Content-Disposition": f'attachment; filename="{file_name}"; filename*=UTF-8\'\'{file_name}',
+                "Content-Type": mime_type,
+                "Content-Length": str(file_size),
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
             }
         )
 
@@ -66,6 +76,40 @@ async def download_file(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to download file: {str(e)}"
+        )
+
+
+@router.get("/{file_id}/view")
+async def view_file(
+    file_id: str
+):
+    """Просмотреть файл (inline, для отображения в браузере)"""
+    try:
+        metadata = await files_service.get_file_metadata(file_id)
+        file_content = await files_service.download_file(file_id)
+
+        file_name = metadata.get("file_name", "file.jpg")
+        mime_type = metadata.get("mime_type", "image/jpeg")
+        file_size = len(file_content)
+
+        # Используем inline для просмотра в браузере
+        return Response(
+            content=file_content,
+            media_type=mime_type,
+            headers={
+                "Content-Disposition": f'inline; filename="{file_name}"; filename*=UTF-8\'\'{file_name}',
+                "Content-Type": mime_type,
+                "Content-Length": str(file_size),
+                "Cache-Control": "public, max-age=3600",  # Кэшируем на 1 час
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to view file: {str(e)}"
         )
 
 @router.get("/{file_id}", response_model=FileResponse)

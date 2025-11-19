@@ -12,71 +12,95 @@ class YOLOv8Service:
         self.yolov8_service_url = settings.YOLOV8_SERVICE_URL
         self.timeout = 60.0
 
-    async def predict(
+    async def predict_bytes(
         self,
-        file: UploadFile,
-        conf: float = 0.25
+        *,
+        filename: str,
+        content: bytes,
+        content_type: str = "application/octet-stream",
+        conf: float = 0.25,
     ) -> Dict[str, Any]:
-        """Отправить запрос на детекцию в YOLOv8 сервис"""
+        """Отправить байтовый буфер в YOLOv8 сервис."""
         try:
-            file_content = await file.read()
-            
-            # Валидация типа файла
-            if not file.content_type or not file.content_type.startswith('image/'):
+            if not content_type.startswith("image/"):
+                logger.warning("Контент без image/*, продолжаем по расширению")
+
+            max_bytes = settings.MAX_YOLO_FILE_SIZE_MB * 1024 * 1024
+            if len(content) > max_bytes:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Файл должен быть изображением (JPG, PNG, TIFF)"
-                )
-            
-            # Валидация размера файла (макс 50MB)
-            if len(file_content) > 50 * 1024 * 1024:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Размер файла не должен превышать 50MB"
+                    detail=f"Размер файла не должен превышать {settings.MAX_YOLO_FILE_SIZE_MB}MB",
                 )
 
-            logger.info(f"Отправка запроса в YOLOv8: {file.filename}, размер: {len(file_content)} bytes, conf={conf}")
-            
+            logger.info(
+                "Отправка запроса в YOLOv8: %s, размер: %s bytes, conf=%s",
+                filename,
+                len(content),
+                conf,
+            )
+
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                files = {"file": (file.filename, file_content, file.content_type)}
+                files = {"file": (filename, content, content_type)}
                 params = {"conf": conf} if conf != 0.25 else {}
                 response = await client.post(
                     f"{self.yolov8_service_url}/predict",
                     files=files,
-                    params=params
+                    params=params,
                 )
-                
+
                 if response.status_code != 200:
-                    logger.error(f"Ошибка от YOLOv8 сервиса: {response.status_code} - {response.text}")
+                    logger.error(
+                        "Ошибка от YOLOv8 сервиса: %s - %s",
+                        response.status_code,
+                        response.text,
+                    )
                     raise HTTPException(
                         status_code=response.status_code,
-                        detail=f"Ошибка от YOLOv8 сервиса: {response.text}"
+                        detail=f"Ошибка от YOLOv8 сервиса: {response.text}",
                     )
-                
+
                 result = response.json()
-                logger.info(f"Детекция завершена: найдено {result.get('total_objects', 0)} объектов")
+                logger.info(
+                    "Детекция завершена: найдено %s объектов",
+                    result.get("total_objects", 0),
+                )
                 return result
 
         except httpx.TimeoutException:
             logger.error("Таймаут при обращении к YOLOv8 сервису")
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="Таймаут при обращении к YOLOv8 сервису. Попробуйте позже."
+                detail="Таймаут при обращении к YOLOv8 сервису. Попробуйте позже.",
             )
         except httpx.ConnectError:
-            logger.error(f"Не удалось подключиться к YOLOv8 сервису: {self.yolov8_service_url}")
+            logger.error("Не удалось подключиться к YOLOv8 сервису: %s", self.yolov8_service_url)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="YOLOv8 сервис недоступен. Проверьте, что сервис запущен."
+                detail="YOLOv8 сервис недоступен. Проверьте, что сервис запущен.",
             )
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Ошибка при обработке запроса: {str(e)}", exc_info=True)
+            logger.error("Ошибка при обработке запроса: %s", str(e), exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Ошибка при обработке запроса: {str(e)}"
+                detail=f"Ошибка при обработке запроса: {str(e)}",
             )
+
+    async def predict(
+        self,
+        file: UploadFile,
+        conf: float = 0.25,
+    ) -> Dict[str, Any]:
+        """Совместимая обертка для UploadFile."""
+        content = await file.read()
+        content_type = file.content_type or "application/octet-stream"
+        return await self.predict_bytes(
+            filename=file.filename or "image",
+            content=content,
+            content_type=content_type,
+            conf=conf,
+        )
 
     async def health_check(self) -> Dict[str, Any]:
         """Проверить здоровье YOLOv8 сервиса"""
@@ -95,14 +119,14 @@ class YOLOv8Service:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(f"{self.yolov8_service_url}/model/info")
-                
+
                 if response.status_code != 200:
                     logger.error(f"Ошибка от YOLOv8 сервиса: {response.status_code} - {response.text}")
                     raise HTTPException(
                         status_code=response.status_code,
                         detail=f"Ошибка от YOLOv8 сервиса: {response.text}"
                     )
-                
+
                 result = response.json()
                 logger.info(f"Информация о модели получена: {result.get('num_classes', 0)} классов")
                 return result
