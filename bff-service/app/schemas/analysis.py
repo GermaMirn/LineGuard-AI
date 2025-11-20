@@ -27,6 +27,7 @@ class AnalysisImageSummary(BaseModel):
 class AnalysisTaskResponse(BaseModel):
     id: UUID
     status: AnalysisStatus
+    route_name: Optional[str] = None
     total_files: int
     total_bytes: int
     processed_files: int
@@ -47,6 +48,7 @@ class AnalysisTaskResponse(BaseModel):
 class AnalysisTaskListItem(BaseModel):
     id: UUID
     status: AnalysisStatus
+    route_name: Optional[str] = None
     total_files: int
     processed_files: int
     defects_found: int

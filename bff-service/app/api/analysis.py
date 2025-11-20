@@ -2,7 +2,7 @@ import io
 import os
 import zipfile
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, WebSocket, status
@@ -55,6 +55,7 @@ async def _ensure_size(upload_file) -> int:
 async def create_batch_task(
     files: List[UploadFile] = File(..., description="Список изображений"),
     conf: float = Query(0.35, ge=0.0, le=1.0, description="Порог уверенности"),
+    route_name: Optional[str] = Query(None, max_length=250, description="Название маршрута"),
     preview_limit: int = Query(
         default=settings.PREVIEW_LIMIT,
         ge=1,
@@ -105,6 +106,7 @@ async def create_batch_task(
         total_bytes=total_bytes,
         confidence_threshold=conf,
         preview_limit=min(preview_limit, settings.PREVIEW_LIMIT),
+        route_name=route_name,
     )
 
     # Оптимизация: сохраняем только первые N файлов как превью, остальные передаём в worker
@@ -194,6 +196,7 @@ async def get_task(
     return AnalysisTaskResponse(
         id=task.id,
         status=task.status,
+        route_name=task.route_name,
         total_files=task.total_files,
         total_bytes=task.total_bytes,
         processed_files=task.processed_files,
@@ -235,6 +238,7 @@ async def list_tasks(
         AnalysisTaskListItem(
             id=task.id,
             status=task.status,
+            route_name=task.route_name,
             total_files=task.total_files,
             processed_files=task.processed_files,
             defects_found=task.defects_found,
@@ -301,4 +305,22 @@ async def task_updates(task_id: str, websocket: WebSocket):
         pass
     finally:
         task_ws_manager.disconnect(task_uuid, websocket)
+
+
+@router.websocket("/ws/history")
+async def history_updates(websocket: WebSocket):
+    """
+    WebSocket endpoint для получения обновлений всех задач в истории.
+    Клиент получает обновления о статусе любой задачи в реальном времени.
+    """
+    await task_ws_manager.connect_history(websocket)
+    try:
+        while True:
+            # Просто держим соединение открытым
+            # Клиент может отправлять ping, но мы их игнорируем
+            await websocket.receive_text()
+    except Exception:
+        pass
+    finally:
+        task_ws_manager.disconnect_history(websocket)
 

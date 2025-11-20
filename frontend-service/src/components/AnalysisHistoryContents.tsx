@@ -1,6 +1,7 @@
-import { useCallback, useState, useRef, useEffect, useMemo } from "react";
+import { useCallback, useState, useRef, useEffect, useMemo, memo } from "react";
 import { Button } from "@heroui/react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
+import { Virtuoso } from "react-virtuoso";
 
 interface DefectSummary {
   type: string;
@@ -68,14 +69,15 @@ interface FileItemProps {
   previewUrl: string | null;
   hasDefects: boolean;
   formatFileSize: (bytes: number) => string;
-  resolveImageUrl: (path?: string | null) => string | null;
+  onOpenImage: (image: TaskImage, viewMode: 'original' | 'result') => void;
 }
 
-function FileItem({ image, previewUrl, hasDefects, formatFileSize, resolveImageUrl }: FileItemProps) {
+const FileItem = memo(({ image, previewUrl, hasDefects, formatFileSize, onOpenImage }: FileItemProps) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -139,18 +141,73 @@ function FileItem({ image, previewUrl, hasDefects, formatFileSize, resolveImageU
   }, [isMenuOpen]);
 
   const handleOpenOriginal = () => {
-    if (image.original_url) {
-      window.open(resolveImageUrl(image.original_url) || "", "_blank");
-    }
+    onOpenImage(image, 'original');
     setIsMenuOpen(false);
   };
 
   const handleOpenResult = () => {
-    if (image.result_url) {
-      window.open(resolveImageUrl(image.result_url) || "", "_blank");
-    }
+    onOpenImage(image, 'result');
     setIsMenuOpen(false);
   };
+
+  const handleDownloadImages = useCallback(async () => {
+    if (!image.file_id && !image.result_file_id) {
+      return;
+    }
+
+    const BFF_SERVICE_URL = (import.meta as any).env?.VITE_BFF_SERVICE_URL || "/api";
+
+    const downloadFile = async (fileId: string, fileName: string) => {
+      try {
+        const response = await fetch(
+          `${BFF_SERVICE_URL}/files/${fileId}/download`,
+          { method: 'GET' }
+        );
+
+        if (!response.ok) {
+          throw new Error(`Failed to download ${fileName}`);
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      } catch (error) {
+        console.error(`Error downloading ${fileName}:`, error);
+        throw error;
+      }
+    };
+
+    try {
+      setIsDownloading(true);
+
+      // Скачиваем оригинал
+      if (image.file_id) {
+        await downloadFile(image.file_id, `original_${image.file_name}`);
+      }
+
+      // Небольшая задержка между скачиваниями для стабильности
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // Скачиваем результат, если он есть
+      if (image.result_file_id) {
+        await downloadFile(image.result_file_id, `result_${image.file_name}`);
+      }
+    } catch (error) {
+      console.error("Error downloading images:", error);
+      alert("Не удалось скачать файлы изображений");
+    } finally {
+      setIsDownloading(false);
+      setIsMenuOpen(false);
+    }
+  }, [image]);
+
+  const isDownloadAvailable = Boolean(image.file_id || image.result_file_id);
 
   return (
     <div className="grid grid-cols-[minmax(0,300px)_1fr_auto_auto] items-center gap-4 p-4 bg-white/5 border border-white/10 rounded-2xl">
@@ -247,12 +304,67 @@ function FileItem({ image, previewUrl, hasDefects, formatFileSize, resolveImageU
             >
               Вывести результат
             </button>
+            <button
+              onClick={handleDownloadImages}
+              disabled={!isDownloadAvailable || isDownloading}
+              className={`w-full text-left px-4 py-2 text-sm transition-colors ${
+                isDownloadAvailable && !isDownloading
+                  ? "text-white hover:bg-white/10"
+                  : "text-white/40 cursor-not-allowed"
+              }`}
+            >
+              {isDownloading ? "Подготовка..." : "Скачать файлы"}
+            </button>
           </div>
         )}
       </div>
     </div>
   );
+});
+
+FileItem.displayName = 'FileItem';
+
+// Мемоизированная карточка статистики
+interface StatCardProps {
+  imageSrc: string;
+  imageAlt: string;
+  value: number;
+  label: string;
+  shadowStyle?: React.CSSProperties;
 }
+
+const StatCard = memo(({ imageSrc, imageAlt, value, label, shadowStyle }: StatCardProps) => {
+  return (
+    <div
+      className="relative text-center rounded-xl bg-white/5 overflow-hidden border border-white/20"
+      style={shadowStyle}
+    >
+      <div className="relative z-10">
+        <img
+          src={imageSrc}
+          alt={imageAlt}
+          className="mx-auto drop-shadow-lg shadow-black/50 w-[100%] rounded-[10px]"
+          loading="lazy"
+          decoding="async"
+          style={{
+            contentVisibility: 'auto',
+            willChange: 'transform',
+          }}
+        />
+        <div className="flex flex-col items-start pl-4 pb-2" style={{marginTop: '-50px'}}>
+          <div className="text-[56px] font-extrabold text-white">
+            {value}
+          </div>
+          <h4 className="text-[16px] font-bold text-white/60 mb-3">
+            {label}
+          </h4>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+StatCard.displayName = 'StatCard';
 
 type SortType = "file_size" | "file_name" | "status" | null;
 type SortDirection = "asc" | "desc";
@@ -271,7 +383,32 @@ export default function AnalysisHistoryContents({
   const filterButtonRef = useRef<HTMLButtonElement>(null);
   const [filterMenuPosition, setFilterMenuPosition] = useState({ top: 0, left: 0 });
 
+  // Состояния для просмотра изображений
+  const [selectedImageForView, setSelectedImageForView] = useState<TaskImage | null>(null);
+  const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<'original' | 'result'>('original');
+
   const BFF_SERVICE_URL = (import.meta as any).env?.VITE_BFF_SERVICE_URL;
+
+  // Предзагрузка изображений статистики при монтировании компонента
+  useEffect(() => {
+    const imagesToPreload = [
+      '/images/folder.svg',
+      '/images/objects.svg',
+      '/images/danger.svg',
+      '/images/smile-face.svg',
+    ];
+
+    imagesToPreload.forEach((src) => {
+      const link = document.createElement('link');
+      link.rel = 'preload';
+      link.as = 'image';
+      link.href = src;
+      document.head.appendChild(link);
+    });
+
+    // Очистка при размонтировании не нужна, так как preload кешируется
+  }, []);
 
   const downloadResultsArchive = useCallback(async () => {
     if (!resultsArchiveFileId) return;
@@ -447,6 +584,416 @@ export default function AnalysisHistoryContents({
     setIsFilterMenuOpen(false);
   }, [sortType, sortDirection]);
 
+  // Открытие изображения для просмотра
+  const handleOpenImage = useCallback((image: TaskImage, mode: 'original' | 'result') => {
+    const index = sortedImages.findIndex(img => img.id === image.id);
+    setSelectedImageForView(image);
+    setSelectedImageIndex(index);
+    setViewMode(mode);
+  }, [sortedImages]);
+
+  // Закрытие просмотра
+  const closeView = useCallback(() => {
+    setSelectedImageForView(null);
+    setSelectedImageIndex(null);
+  }, []);
+
+  // Переключение между изображениями
+  const navigateImage = useCallback((direction: 'prev' | 'next') => {
+    if (selectedImageIndex === null) return;
+
+    let newIndex = selectedImageIndex;
+    if (direction === 'prev' && selectedImageIndex > 0) {
+      newIndex = selectedImageIndex - 1;
+    } else if (direction === 'next' && selectedImageIndex < sortedImages.length - 1) {
+      newIndex = selectedImageIndex + 1;
+    }
+
+    if (newIndex !== selectedImageIndex) {
+      setSelectedImageIndex(newIndex);
+      setSelectedImageForView(sortedImages[newIndex]);
+    }
+  }, [selectedImageIndex, sortedImages]);
+
+  // Обработка клавиатуры для навигации в режиме просмотра
+  useEffect(() => {
+    if (!selectedImageForView) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeView();
+      } else if (event.key === 'ArrowLeft') {
+        navigateImage('prev');
+      } else if (event.key === 'ArrowRight') {
+        navigateImage('next');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedImageForView, closeView, navigateImage]);
+
+  // Мемоизируем блок статистики для предотвращения лишних перерисовок
+  const statsCards = useMemo(() => {
+    return (
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <StatCard
+          imageSrc="/images/folder.svg"
+          imageAlt="folder"
+          value={processedFilesCount}
+          label="Обработанных файлов"
+        />
+        <StatCard
+          imageSrc="/images/objects.svg"
+          imageAlt="objects"
+          value={results.total_objects}
+          label="Обнаруженных объектов"
+        />
+        <StatCard
+          imageSrc="/images/danger.svg"
+          imageAlt="danger"
+          value={results.defects_count}
+          label="Дефектов найдено"
+          shadowStyle={{
+            boxShadow: 'inset 0 0 20px rgba(255, 0, 0, 0.2), inset 0 0 15px rgba(255, 0, 0, 0.2), 0 0 10px rgba(255, 0, 0, 0.1)',
+          }}
+        />
+        <StatCard
+          imageSrc="/images/smile-face.svg"
+          imageAlt="smile-face"
+          value={results.total_objects - results.defects_count}
+          label="Объектов без поломок"
+          shadowStyle={{
+            boxShadow: 'inset 0 0 20px rgba(0, 255, 8, 0.2), inset 0 0 15px rgba(0, 255, 8, 0.2), 0 0 10px rgba(255, 0, 0, 0.1)',
+          }}
+        />
+      </div>
+    );
+  }, [processedFilesCount, results.total_objects, results.defects_count]);
+
+  // Если открыт просмотр - показываем только просмотр
+  if (selectedImageForView && selectedImageIndex !== null) {
+    const currentImageUrl = viewMode === 'original'
+      ? resolveImageUrl(selectedImageForView.original_url)
+      : resolveImageUrl(selectedImageForView.result_url);
+
+    return (
+      <div
+        className="h-full flex flex-col"
+        style={{ padding: '34px 96px 64px' }}
+      >
+        {/* Список миниатюр для навигации */}
+        {sortedImages.length > 0 && (() => {
+          const itemWidth = 38;
+          const itemGap = 16;
+          const maxWidth = 528;
+          const calculatedWidth = sortedImages.length * itemWidth + (sortedImages.length - 1) * itemGap;
+          const containerWidth = Math.min(calculatedWidth, maxWidth);
+          const containerHeight = 38;
+
+          return (
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="relative"
+            >
+              {/* Список миниатюр по центру */}
+              <div className="flex justify-center">
+                <div style={{ maxWidth: `${maxWidth}px`, width: `${containerWidth}px` }}>
+                  <div className="pb-4">
+                    <div
+                      className="no-scroll flex gap-4"
+                      style={{
+                        height: `${containerHeight}px`,
+                        width: `${containerWidth}px`,
+                        overflowX: sortedImages.length > 10 ? 'auto' : 'hidden',
+                        overflowY: 'hidden',
+                        scrollbarWidth: 'none',
+                        msOverflowStyle: 'none',
+                      }}
+                    >
+                      {sortedImages.map((img, index) => {
+                        const previewUrl = resolveImageUrl(img.result_url || img.original_url);
+                        return (
+                          <div
+                            key={img.id}
+                            className={`relative flex-shrink-0 overflow-hidden cursor-pointer hover:opacity-80 transition-all bg-white/10 flex items-center justify-center ${
+                              selectedImageIndex === index ? 'ring-2 ring-white ring-offset-2 ring-offset-transparent' : ''
+                            }`}
+                            style={{
+                              width: '38px',
+                              height: '38px',
+                              borderRadius: '8px',
+                            }}
+                            onClick={() => {
+                              setSelectedImageIndex(index);
+                              setSelectedImageForView(img);
+                            }}
+                          >
+                            {previewUrl ? (
+                              <img
+                                src={previewUrl}
+                                alt={img.file_name}
+                                className="w-full h-full object-cover"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <div className="text-white/40 text-xs text-center px-1">
+                                {index + 1}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* Кнопка закрытия в правом верхнем углу */}
+              <button
+                onClick={closeView}
+                className="absolute top-1 right-0 z-10 h-[max-content] w-[max-content]"
+                style={{ right: '-50px' }}
+                aria-label="Закрыть"
+              >
+                <svg
+                  className="w-6 h-6 text-white"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </motion.div>
+          );
+        })()}
+
+        {/* Просмотр изображения */}
+        <div className="flex-1 relative flex items-center justify-center gap-6">
+          {/* Изображение */}
+          <div className="flex-1 flex items-center justify-center">
+            {currentImageUrl ? (
+              <img
+                src={currentImageUrl}
+                alt={selectedImageForView.file_name}
+                className="max-w-full max-h-full object-contain rounded-lg mt-[-70px]"
+              />
+            ) : (
+              <div className="flex items-center justify-center text-white/60">
+                Изображение недоступно
+              </div>
+            )}
+          </div>
+
+          {/* Панель метрик (только для режима "Результат") */}
+          <AnimatePresence>
+            {viewMode === 'result' && selectedImageForView.summary?.detections && selectedImageForView.summary.detections.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+                transition={{ duration: 0.3 }}
+                className="w-80 h-full overflow-y-auto bg-black/60 backdrop-blur-sm rounded-lg p-4 space-y-4"
+                style={{ maxHeight: 'calc(100vh - 200px)' }}
+              >
+              <div className="sticky top-0 bg-black/60 backdrop-blur-sm pb-2 border-b border-white/20">
+                <h3 className="text-lg font-bold text-white">Метрики анализа</h3>
+                <p className="text-sm text-white/60">
+                  Обнаружено объектов: {selectedImageForView.summary.total_objects || selectedImageForView.summary.detections.length}
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                {selectedImageForView.summary.detections.map((detection, index) => {
+                  const isDefect = detection.defect_summary?.type && detection.defect_summary.type !== 'Норма';
+                  const confidencePercent = (detection.confidence * 100).toFixed(1);
+
+                  return (
+                    <div
+                      key={index}
+                      className={`p-3 rounded-lg border ${
+                        isDefect
+                          ? 'bg-red-500/10 border-red-500/30'
+                          : 'bg-emerald-500/10 border-emerald-500/30'
+                      }`}
+                    >
+                      {/* Класс объекта */}
+                      <div className="flex items-center justify-between mb-2">
+                        <span className={`text-sm font-semibold ${
+                          isDefect ? 'text-red-300' : 'text-emerald-300'
+                        }`}>
+                          {detection.class_ru || detection.class}
+                        </span>
+                        <span className={`text-xs px-2 py-1 rounded-full ${
+                          isDefect
+                            ? 'bg-red-500/20 text-red-200'
+                            : 'bg-emerald-500/20 text-emerald-200'
+                        }`}>
+                          {isDefect ? 'Дефект' : 'Норма'}
+                        </span>
+                      </div>
+
+                      {/* Уверенность */}
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-white/60">Уверенность</span>
+                          <span className="text-white font-semibold">{confidencePercent}%</span>
+                        </div>
+                        <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full transition-all ${
+                              detection.confidence > 0.8
+                                ? 'bg-green-500'
+                                : detection.confidence > 0.6
+                                ? 'bg-yellow-500'
+                                : 'bg-orange-500'
+                            }`}
+                            style={{ width: `${confidencePercent}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Информация о дефекте */}
+                      {isDefect && detection.defect_summary && (
+                        <div className="mt-2 pt-2 border-t border-white/10">
+                          <p className="text-xs text-white/80 font-medium mb-1">
+                            {detection.defect_summary.type}
+                          </p>
+                          {detection.defect_summary.description && (
+                            <p className="text-xs text-white/60">
+                              {detection.defect_summary.description}
+                            </p>
+                          )}
+                          {detection.defect_summary.severity && (
+                            <span className={`inline-block mt-1 text-xs px-2 py-0.5 rounded ${
+                              detection.defect_summary.severity === 'high' || detection.defect_summary.severity === 'критическая'
+                                ? 'bg-red-600/30 text-red-200'
+                                : detection.defect_summary.severity === 'medium' || detection.defect_summary.severity === 'средняя'
+                                ? 'bg-orange-600/30 text-orange-200'
+                                : 'bg-yellow-600/30 text-yellow-200'
+                            }`}>
+                              Серьезность: {detection.defect_summary.severity}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Размер bbox */}
+                      {detection.bbox_size && (
+                        <div className="mt-2 text-xs text-white/50">
+                          Размер: {Math.round(detection.bbox_size.width)}×{Math.round(detection.bbox_size.height)}px
+                          {detection.bbox_size.is_small && ' (малый объект)'}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Кнопки переключения режима просмотра */}
+          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 flex gap-2 bg-black/60 backdrop-blur-sm rounded-lg p-2">
+            <button
+              onClick={() => setViewMode('original')}
+              className={`px-4 py-2 rounded-lg transition-colors ${
+                viewMode === 'original'
+                  ? 'bg-white/20 text-white'
+                  : 'text-white/60 hover:bg-white/10'
+              }`}
+            >
+              Оригинал
+            </button>
+            <button
+              onClick={() => setViewMode('result')}
+              disabled={!selectedImageForView.result_url}
+              className={`px-4 py-2 rounded-lg transition-colors ${
+                viewMode === 'result'
+                  ? 'bg-white/20 text-white'
+                  : selectedImageForView.result_url
+                  ? 'text-white/60 hover:bg-white/10'
+                  : 'text-white/30 cursor-not-allowed'
+              }`}
+            >
+              Результат
+            </button>
+          </div>
+
+          {/* Кнопки навигации */}
+          {selectedImageIndex > 0 && (
+            <button
+              onClick={() => navigateImage('prev')}
+              className="absolute left-4 top-1/2 transform -translate-y-1/2 p-3 bg-black/60 backdrop-blur-sm rounded-full hover:bg-black/80 transition-colors"
+              aria-label="Предыдущее изображение"
+            >
+              <svg
+                className="w-6 h-6 text-white"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15 19l-7-7 7-7"
+                />
+              </svg>
+            </button>
+          )}
+          {selectedImageIndex < sortedImages.length - 1 && (
+            <button
+              onClick={() => navigateImage('next')}
+              className="absolute right-4 top-1/2 transform -translate-y-1/2 p-3 bg-black/60 backdrop-blur-sm rounded-full hover:bg-black/80 transition-colors"
+              aria-label="Следующее изображение"
+            >
+              <svg
+                className="w-6 h-6 text-white"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 5l7 7-7 7"
+                />
+              </svg>
+            </button>
+          )}
+
+          {/* Информация о файле внизу */}
+          <div className="absolute bottom-0 left-0 right-0 p-4 bg-black/60 backdrop-blur-sm">
+            <p className="text-white text-xl font-medium truncate text-center">
+              {selectedImageForView.file_name}
+            </p>
+            <div className="flex items-center justify-center gap-4 mt-2">
+              <p className="text-white/60 text-base">
+                {formatFileSize(selectedImageForView.file_size)}
+              </p>
+              <p className="text-white/60 text-base">
+                {selectedImageIndex + 1} / {sortedImages.length}
+              </p>
+              <p className={`text-base font-semibold ${
+                getImageStatus(selectedImageForView) ? "text-red-300" : "text-emerald-300"
+              }`}>
+                {getImageStatus(selectedImageForView) ? "Поврежден" : "Без дефектов"}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <motion.div
       key="results"
@@ -460,83 +1007,7 @@ export default function AnalysisHistoryContents({
       {/* Результаты */}
       <div className="space-y-8">
           {/* Статистика */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <div className="relative text-center rounded-xl bg-white/5 overflow-hidden border border-white/20">
-              <div className="relative z-10">
-                <img
-                  src="/images/folder.svg"
-                  alt="folder"
-                  className="mx-auto drop-shadow-lg shadow-black/50 w-[100%] rounded-[10px]"
-                />
-                 <div className="flex flex-col items-start pl-4 pb-2" style={{marginTop: '-50px'}}>
-                   <div className="text-[56px] font-extrabold text-white">
-                     {processedFilesCount}
-                   </div>
-                   <h4 className="text-[16px] font-bold text-white/60 mb-3">
-                     Обработанных файлов
-                   </h4>
-                 </div>
-              </div>
-            </div>
-            <div className="relative text-center rounded-xl bg-white/5 overflow-hidden border border-white/20">
-              <div className="relative z-10">
-                <img
-                  src="/images/objects.svg"
-                  alt="objects"
-                  className="mx-auto drop-shadow-lg shadow-black/50 w-[100%] rounded-[10px]"
-                />
-
-                <div className="flex flex-col items-start pl-4 pb-2" style={{marginTop: '-50px'}}>
-                  <div className="text-[56px] font-extrabold text-white">
-                  {results.total_objects}
-                  </div>
-                  <h4 className="text-[16px] font-bold text-white/60 mb-3">
-                    Обнаруженных объектов
-                  </h4>
-                </div>
-              </div>
-            </div>
-            <div
-              className="relative text-center rounded-xl bg-white/5 overflow-hidden border border-white/20"
-              style={{boxShadow: 'inset 0 0 20px rgba(255, 0, 0, 0.2), inset 0 0 15px rgba(255, 0, 0, 0.2), 0 0 10px rgba(255, 0, 0, 0.1)',}}
-            >
-
-              <div className="relative z-10">
-                <img
-                  src="/images/danger.svg"
-                  alt="danger"
-                  className="mx-auto drop-shadow-lg shadow-black/50 w-[100%] rounded-[10px]"
-                />
-                <div className="flex flex-col items-start pl-4 pb-2" style={{marginTop: '-50px'}}>
-                  <div className="text-[56px] font-extrabold text-white">
-                  {results.defects_count}
-                  </div>
-                  <h4 className="text-[16px] font-bold text-white/60 mb-3">
-                    Дефектов найдено
-                  </h4>
-                </div>
-              </div>
-            </div>
-            <div
-              className="text-center rounded-xl bg-white/5 border border-white/20"
-              style={{boxShadow: 'inset 0 0 20px rgba(0, 255, 8, 0.2), inset 0 0 15px rgba(0, 255, 8, 0.2), 0 0 10px rgba(255, 0, 0, 0.1)',}}
-            >
-              <img
-                src="/images/smile-face.svg"
-                alt="smile-face"
-                className="mx-auto drop-shadow-lg shadow-black/50 w-[100%] rounded-[10px]"
-              />
-
-              <div className="flex flex-col items-start pl-4 pb-2" style={{marginTop: '-50px'}}>
-                <div className="text-[56px] font-extrabold text-white">
-                {results.total_objects - results.defects_count}
-                </div>
-                <h4 className="text-[16px] font-bold text-white/60 mb-3">
-                  Объектов без поломок
-                </h4>
-              </div>
-            </div>
-          </div>
+          {statsCards}
 
           {/* изображения по аналитике */}
           <div className="relative mb-6 h-[600px] border border-white/20 rounded-xl flex flex-col bg-white/5">
@@ -731,7 +1202,7 @@ export default function AnalysisHistoryContents({
                   <div className="w-10 flex-shrink-0 ml-8"></div>
                 </div>
               )}
-              <div className="h-full overflow-y-auto p-4 space-y-3">
+              <div className="h-full">
                 {sortedImages.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-white/60 text-center gap-2">
                     <p className="text-lg font-semibold">Файлов пока нет</p>
@@ -740,150 +1211,31 @@ export default function AnalysisHistoryContents({
                     </p>
                   </div>
                 ) : (
-                  sortedImages.map((image: TaskImage) => {
-                    const previewUrl = resolveImageUrl(image.result_url || image.original_url);
-                    const hasDefects = getImageStatus(image);
+                  <Virtuoso
+                    style={{ height: '100%', paddingTop: '16px', paddingBottom: '16px' }}
+                    data={sortedImages}
+                    overscan={200}
+                    itemContent={(_index, image) => {
+                      const previewUrl = resolveImageUrl(image.result_url || image.original_url);
+                      const hasDefects = getImageStatus(image);
 
-                    return (
-                      <FileItem
-                        key={image.id}
-                        image={image}
-                        previewUrl={previewUrl}
-                        hasDefects={hasDefects}
-                        formatFileSize={formatFileSize}
-                        resolveImageUrl={resolveImageUrl}
-                      />
-                    );
-                  })
+                      return (
+                        <div style={{ marginBottom: '12px', paddingLeft: '16px', paddingRight: '16px' }}>
+                          <FileItem
+                            image={image}
+                            previewUrl={previewUrl}
+                            hasDefects={hasDefects}
+                            formatFileSize={formatFileSize}
+                            onOpenImage={handleOpenImage}
+                          />
+                        </div>
+                      );
+                    }}
+                  />
                 )}
               </div>
             </div>
           </div>
-
-        {/* Детекции */}
-        {/* {results.detections && results.detections.length > 0 && (
-          <div className="mt-8">
-            <h3 className="text-2xl font-bold mb-6 text-white">
-              🔍 Детекции
-            </h3>
-
-            <div className="mb-6">
-              <label className="block mb-3 font-bold text-lg text-white/80">
-                Фильтр по категориям:
-              </label>
-              <div className="flex flex-wrap gap-3">
-                {allClasses.map((className) => (
-                  <Chip
-                    key={className}
-                    variant={selectedClasses.includes(className) ? "solid" : "bordered"}
-                    onClick={() => {
-                      if (selectedClasses.includes(className)) {
-                        setSelectedClasses(
-                          selectedClasses.filter((c) => c !== className)
-                        );
-                      } else {
-                        setSelectedClasses([...selectedClasses, className]);
-                      }
-                    }}
-                    className="cursor-pointer text-base px-4 py-2 font-semibold transition-all border-white/30 text-white"
-                    style={{
-                      backgroundColor: selectedClasses.includes(className)
-                        ? 'rgba(255, 255, 255, 0.2)'
-                        : 'transparent'
-                    }}
-                  >
-                    {CLASS_NAMES_RU[className] || className}
-                  </Chip>
-                ))}
-              </div>
-            </div>
-
-            <div className="overflow-x-auto rounded-xl border border-white/20 bg-black/50">
-              <table className="w-full border-collapse">
-                <thead className="bg-white/5">
-                  <tr>
-                    <th className="text-left p-4 font-bold text-white text-sm">
-                      Категория
-                    </th>
-                    <th className="text-left p-4 font-bold text-white text-sm">
-                      Признак дефекта
-                    </th>
-                    <th className="text-left p-4 font-bold text-white text-sm">
-                      Уверенность
-                    </th>
-                    <th className="text-left p-4 font-bold text-white text-sm">
-                      Координаты
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredDetections.map((detection, index) => (
-                    <tr
-                      key={index}
-                      className="border-b border-white/10 hover:bg-white/5 transition-colors"
-                    >
-                      <td className="p-4">
-                        <span className={`px-3 py-1 rounded text-sm font-semibold ${
-                          isDefect(detection.class)
-                            ? "bg-red-500/20 text-red-300"
-                            : "bg-green-500/20 text-green-300"
-                        }`}>
-                          {detection.class_ru}
-                        </span>
-                      </td>
-                      <td className="p-4">
-                        <div className="flex flex-col gap-2">
-                          <span className="text-white/80 font-semibold">
-                            {detection.defect_summary?.type || "Норма"}
-                          </span>
-                          <p className="text-sm text-white/60">
-                            {detection.defect_summary?.description ||
-                              "Признаков дефекта не обнаружено"}
-                          </p>
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-white">
-                            {(detection.confidence * 100).toFixed(1)}%
-                          </span>
-                          <div className="w-24 h-2 bg-white/20 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full ${
-                                detection.confidence > 0.7
-                                  ? "bg-green-500"
-                                  : detection.confidence > 0.5
-                                  ? "bg-yellow-500"
-                                  : "bg-red-500"
-                              }`}
-                              style={{ width: `${detection.confidence * 100}%` }}
-                            />
-                          </div>
-                        </div>
-                      </td>
-                      <td className="p-4 text-sm text-white/60 font-mono bg-white/5 rounded">
-                        [{detection.bbox.map((c) => Math.round(c)).join(", ")}]
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )} */}
-
-        {/* Кнопка возврата */}
-        {/* {onBack && (
-          <div className="mt-8 text-center">
-            <Button
-              variant="bordered"
-              className="border-white/30 text-white font-medium px-6 py-3 rounded-lg hover:bg-white/10"
-              onClick={onBack}
-            >
-              Загрузить новые изображения
-            </Button>
-          </div>
-        )} */}
       </div>
     </motion.div>
   );

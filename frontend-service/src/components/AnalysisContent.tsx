@@ -49,6 +49,7 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confidenceThreshold] = useState(0.5);
+  const [routeName, setRouteName] = useState<string>("");
   const [selectedImageForView, setSelectedImageForView] = useState<FileWithPreview | null>(null);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
@@ -322,8 +323,14 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
         formData.append("files", fileWithPreview.file);
       });
 
+      // Формируем URL с параметрами
+      let url = `/predict/batch?conf=${confidenceThreshold}`;
+      if (routeName.trim()) {
+        url += `&route_name=${encodeURIComponent(routeName.trim())}`;
+      }
+
       const response = await apiClient.post(
-        `/predict/batch?conf=${confidenceThreshold}`,
+        url,
         formData,
         {
           headers: {
@@ -807,13 +814,26 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
               </motion.div>
             )}
 
-            {/* Кнопка "Начать анализ" */}
+            {/* Поле ввода названия маршрута и кнопка "Начать анализ" */}
             {selectedFiles.length > 0 && !loading && !analysisProgress && (
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="mt-6 flex justify-center"
+                className="mt-6 flex flex-col items-center gap-4"
               >
+                <div className="w-full max-w-md">
+                  <input
+                    type="text"
+                    value={routeName}
+                    onChange={(e) => setRouteName(e.target.value.slice(0, 250))}
+                    placeholder="Название маршрута (необязательно, до 250 символов)"
+                    className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:border-white/40 transition-colors"
+                    maxLength={250}
+                  />
+                  <p className="text-white/40 text-xs mt-1 text-right">
+                    {routeName.length} / 250
+                  </p>
+                </div>
                 <Button
                   size="lg"
                   className="text-white font-bold text-lg rounded-full hover:scale-105 transition-all duration-300 flex items-center justify-center border border-white/60 h-[42px]"

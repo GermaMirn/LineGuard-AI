@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import TaskHistoryContents from "./TaskHistoryContents";
+import TaskHistoryContents from "../components/TaskHistoryContents";
 import apiClient from "@/shared/api/axios";
 
 interface TaskItemData {
@@ -23,7 +23,7 @@ interface TaskUpdateMessage {
   message?: string;
 }
 
-export default function HistoryContent() {
+export default function HistoryPage() {
   const [tasks, setTasks] = useState<TaskItemData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -128,7 +128,7 @@ export default function HistoryContent() {
 
   if (loading) {
     return (
-      <div className="h-full flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#1a1a2e] to-[#16213e]">
         <div className="flex flex-col items-center gap-4">
           <div className="w-16 h-16 border-4 border-white/20 border-t-white rounded-full animate-spin"></div>
           <p className="text-white/80 text-lg">Загрузка истории...</p>
@@ -139,7 +139,7 @@ export default function HistoryContent() {
 
   if (error) {
     return (
-      <div className="h-full flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#1a1a2e] to-[#16213e]">
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-6 max-w-md">
           <h3 className="text-red-300 text-xl font-bold mb-2">Ошибка</h3>
           <p className="text-red-200">{error}</p>
@@ -148,6 +148,10 @@ export default function HistoryContent() {
     );
   }
 
-  return <TaskHistoryContents tasks={tasks} />;
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-[#1a1a2e] to-[#16213e]">
+      <TaskHistoryContents tasks={tasks} />
+    </div>
+  );
 }
 

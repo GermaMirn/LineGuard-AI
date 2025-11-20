@@ -34,6 +34,7 @@ class AnalysisTask(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     status = Column(Enum(AnalysisStatus), nullable=False, default=AnalysisStatus.QUEUED)
+    route_name = Column(String(250), nullable=True)
     total_files = Column(Integer, nullable=False, default=0)
     total_bytes = Column(BigInteger, nullable=False, default=0)
     processed_files = Column(Integer, nullable=False, default=0)

@@ -15,12 +15,14 @@ async def create_task(
     total_bytes: int,
     confidence_threshold: float,
     preview_limit: int,
+    route_name: Optional[str] = None,
 ) -> AnalysisTask:
     task = AnalysisTask(
         total_files=total_files,
         total_bytes=total_bytes,
         confidence_threshold=confidence_threshold,
         preview_limit=preview_limit,
+        route_name=route_name,
         status=AnalysisStatus.QUEUED,
     )
     session.add(task)

@@ -23,6 +23,7 @@ build/
 dataset/images/
 dataset/labels/
 dataset/insulators/
+real_dataset/
 *.tar
 *.tar.gz
 dataset_for_colab.tar.gz
@@ -31,10 +32,6 @@ dataset_for_colab.tar.gz
 models/*.pt
 models/*.pth
 models/*.onnx
-
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb
 
 # OS
 .DS_Store
