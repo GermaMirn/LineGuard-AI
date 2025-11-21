@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import TaskHistoryContents from "./TaskHistoryContents";
+import Loader from "./Loader";
 import apiClient from "@/shared/api/axios";
+import Breadcrumbs from "./Breadcrumbs";
 
 interface TaskItemData {
   id: string;
@@ -130,7 +132,7 @@ export default function HistoryContent() {
     return (
       <div className="h-full flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
-          <div className="w-16 h-16 border-4 border-white/20 border-t-white rounded-full animate-spin"></div>
+          <Loader />
           <p className="text-white/80 text-lg">Загрузка истории...</p>
         </div>
       </div>
@@ -148,6 +150,28 @@ export default function HistoryContent() {
     );
   }
 
-  return <TaskHistoryContents tasks={tasks} />;
+  return (
+    <div className="h-full flex flex-col" style={{ padding: '42px 96px 48px' }}>
+      {/* Хлебные крошки */}
+      <div className="mb-8">
+        <Breadcrumbs
+          items={[
+            { label: "Главная", path: "/" },
+            { label: "История" }
+          ]}
+        />
+      </div>
+      
+      <div className="flex-1 flex flex-col">
+        <TaskHistoryContents 
+          tasks={tasks}
+          onTaskDeleted={(taskId: string) => {
+            // Удаляем задачу из локального состояния
+            setTasks((prevTasks) => prevTasks.filter((task) => task.id !== taskId));
+          }}
+        />
+      </div>
+    </div>
+  );
 }
 

@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Button, Progress } from "@heroui/react";
+import { Button } from "@heroui/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Virtuoso } from "react-virtuoso";
 import apiClient from "@/shared/api/axios";
 import AnalysisLoader from "./AnalysisLoader";
+import Loader from "./Loader";
+import Breadcrumbs from "./Breadcrumbs";
+import PhotoThumbnails from "./PhotoThumbnails";
 
 
 const MAX_SIZE_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
@@ -49,7 +51,7 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confidenceThreshold] = useState(0.5);
-  const [routeName, setRouteName] = useState<string>("");
+  // const [routeName, setRouteName] = useState<string>("");
   const [selectedImageForView, setSelectedImageForView] = useState<FileWithPreview | null>(null);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
@@ -325,9 +327,9 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
 
       // Формируем URL с параметрами
       let url = `/predict/batch?conf=${confidenceThreshold}`;
-      if (routeName.trim()) {
-        url += `&route_name=${encodeURIComponent(routeName.trim())}`;
-      }
+      // if (routeName.trim()) {
+      //   url += `&route_name=${encodeURIComponent(routeName.trim())}`;
+      // }
 
       const response = await apiClient.post(
         url,
@@ -372,122 +374,32 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
   if (selectedImageForView && selectedImageIndex !== null) {
     return (
       <div
-        className="h-full flex flex-col"
-        style={{ padding: '34px 96px 64px' }}
+        className="h-full flex flex-col items-center justify-center relative"
+        style={{ padding: '42px 96px 48px' }}
       >
-        {/* Список миниатюр для навигации */}
-        {selectedFiles.length > 0 && (() => {
-          const itemWidth = 38;
-          const itemGap = 16;
-          const maxWidth = 528;
-          const calculatedWidth = selectedFiles.length * itemWidth + (selectedFiles.length - 1) * itemGap;
-          const containerWidth = Math.min(calculatedWidth, maxWidth);
-          const containerHeight = 38;
-
-          return (
-            <motion.div
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="relative"
-            >
-              {/* Список миниатюр по центру */}
-              <div className="flex justify-center ">
-                <div style={{ maxWidth: `${maxWidth}px`, width: `${containerWidth}px` }}>
-                  <div className="pb-4">
-                    <div
-                      className="no-scroll"
-                      style={{
-                        height: `${containerHeight}px`,
-                        width: `${containerWidth}px`,
-                        overflowX: selectedFiles.length > 10 ? 'auto' : 'hidden',
-                        overflowY: 'hidden',
-                        scrollbarWidth: 'none',
-                        msOverflowStyle: 'none',
-                      }}
-                    >
-                      <Virtuoso
-                        data={selectedFiles}
-                        totalCount={selectedFiles.length}
-                        style={{
-                          height: `${containerHeight}px`,
-                          width: '100%',
-                        }}
-                        horizontalDirection
-                        itemContent={(index) => {
-                          const fileWithPreview = selectedFiles[index];
-                          if (!fileWithPreview.preview) {
-                            setTimeout(() => loadPreview(fileWithPreview), 0);
-                          }
-                          return (
-                            <div
-                              style={{
-                                width: '38px',
-                                height: '38px',
-                                marginRight: '16px',
-                                flexShrink: 0,
-                                display: 'inline-block',
-                              }}
-                            >
-                              <div
-                                className={`relative w-[38px] h-[38px] overflow-hidden cursor-pointer hover:opacity-80 transition-all bg-white/10 flex items-center justify-center ${
-                                  selectedImageIndex === index ? 'ring-2 ring-white ring-offset-2 ring-offset-transparent' : ''
-                                }`}
-                                style={{ borderRadius: '8px' }}
-                                onClick={() => openImageForView(fileWithPreview, index)}
-                              >
-                                {fileWithPreview.preview ? (
-                                  <img
-                                    src={fileWithPreview.preview}
-                                    alt={fileWithPreview.file.name}
-                                    className="w-full h-full object-cover"
-                                    loading="lazy"
-                                    onError={() => {
-                                      loadPreview(fileWithPreview);
-                                    }}
-                                  />
-                                ) : (
-                                  <div className="text-white/40 text-xs text-center px-1">
-                                    {index + 1}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-              {/* Кнопка удаления в правом верхнем углу */}
-              {selectedImageForView && (
-                <button
-                  onClick={() => removeFile(selectedImageForView.id)}
-                  className="absolute top-1 right-0 z-10 h-[max-content] w-[max-content]"
-                  style={{ right: '-50px' }}
-                  aria-label="Удалить"
-                >
-                  <svg
-                    className="w-6 h-6 text-white"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                    />
-                  </svg>
-                </button>
-              )}
-            </motion.div>
-          );
-        })()}
+        {/* Кнопка удалить */}
+        <button
+          onClick={() => removeFile(selectedImageForView.id)}
+          className="absolute top-8 right-8 z-10 p-3 transition-colors"
+          aria-label="Удалить"
+        >
+          <svg
+            className="w-6 h-6 text-white"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+            />
+          </svg>
+        </button>
 
         {/* Просмотр фотки */}
-        <div className="flex-1 relative flex items-center justify-center">
+        <div className="flex-1 relative flex items-center justify-center w-full">
           {/* Изображение */}
           {selectedImageForView.preview ? (
             <img
@@ -524,7 +436,7 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
   return (
     <div
       className="h-full flex flex-col"
-      style={{ padding: selectedFiles.length > 0 ? '34px 96px 64px' : '128px 96px' }}
+      style={{ padding: selectedFiles.length > 0 ? '42px 96px 48px' : '42px 96px 48px' }}
     >
       <AnimatePresence mode="wait">
         <motion.div
@@ -535,99 +447,19 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
           transition={{ duration: 0.3 }}
           className="w-full h-full flex flex-col gap-6"
         >
-            {/* Загруженные изображения над drag and drop */}
-            {selectedFiles.length > 0 && (() => {
-              const itemWidth = 38;
-              const itemGap = 16;
-              const maxWidth = 528;
-              const calculatedWidth = selectedFiles.length * itemWidth + (selectedFiles.length - 1) * itemGap;
-              const containerWidth = Math.min(calculatedWidth, maxWidth);
-              const containerHeight = 38;
-
-              return (
-              <motion.div
-                initial={{ opacity: 0, y: -20 }}
-                animate={{ opacity: 1, y: 0 }}
-                style={{ maxWidth: `${maxWidth}px`, width: `${containerWidth}px`, margin: '0 auto' }}
-              >
-                <div className="pb-4">
-                  <div
-                    className="no-scroll"
-                    style={{
-                      height: `${containerHeight}px`,
-                      width: `${containerWidth}px`,
-                      overflowX: selectedFiles.length > 10 ? 'auto' : 'hidden',
-                      overflowY: 'hidden',
-                      scrollbarWidth: 'none',
-                      msOverflowStyle: 'none',
-                    }}
-                  >
-                    <Virtuoso
-                      data={selectedFiles}
-                      totalCount={selectedFiles.length}
-                      style={{
-                        height: `${containerHeight}px`,
-                        width: '100%',
-                      }}
-                      horizontalDirection
-                      itemContent={(index) => {
-                      const fileWithPreview = selectedFiles[index];
-
-                      // Загружаем превью для видимых элементов
-                      if (!fileWithPreview.preview) {
-                        setTimeout(() => loadPreview(fileWithPreview), 0);
-                      }
-
-                      return (
-                        <div
-                          style={{
-                            width: '38px',
-                            height: '38px',
-                            marginRight: '16px',
-                            flexShrink: 0,
-                            display: 'inline-block',
-                          }}
-                        >
-                          <div
-                            className={`relative overflow-hidden cursor-pointer hover:opacity-80 transition-all bg-white/10 flex items-center justify-center ${
-                              selectedImageIndex === index ? 'ring-2 ring-white ring-offset-2 ring-offset-transparent' : ''
-                            }`}
-                            style={{
-                              borderRadius: '8px',
-                              width: selectedImageIndex === index ? '48px' : '38px',
-                              height: selectedImageIndex === index ? '48px' : '38px',
-                            }}
-                            onClick={() => openImageForView(fileWithPreview, index)}
-                          >
-                            {fileWithPreview.preview ? (
-                              <img
-                                src={fileWithPreview.preview}
-                                alt={fileWithPreview.file.name}
-                                className="w-full h-full object-cover"
-                                loading="lazy"
-                                onError={() => {
-                                  loadPreview(fileWithPreview);
-                                }}
-                              />
-                            ) : (
-                              <div className="text-white/40 text-xs text-center px-1">
-                                {index + 1}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    }}
-                    />
-                  </div>
-                </div>
-              </motion.div>
-              );
-            })()}
+            {/* Хлебные крошки */}
+            <div className="mb-2">
+              <Breadcrumbs
+                items={[
+                  { label: "Главная", path: "/" },
+                  { label: "Анализ файлов" }
+                ]}
+              />
+            </div>
 
             {/* Drop Zone */}
             <div
-              className={`relative border-2 border-dashed rounded-2xl text-center transition-all duration-300 flex-1 flex items-center justify-center ${
+              className={`relative border-2 border-dashed rounded-2xl text-center transition-all duration-300 flex-1 flex flex-col ${
                 loading || analysisProgress
                   ? "border-white/20 bg-white/5 cursor-not-allowed opacity-50"
                   : isDragging
@@ -636,7 +468,7 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
               }`}
               style={{
                 padding: selectedFiles.length > 0
-                  ? '48px 96px 48px 96px'  // Когда загружены документы
+                  ? '24px'  // Когда загружены документы
                   : '134px 96px 170px 96px'  // До загрузки данных
               }}
               onDragOver={(e) => {
@@ -666,6 +498,21 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
                 className="hidden"
               />
 
+              {/* Загруженные изображения внутри drag and drop */}
+              {selectedFiles.length > 0 && (
+                <div className="mb-6" onClick={(e) => e.stopPropagation()}>
+                  <PhotoThumbnails
+                    files={selectedFiles}
+                    selectedIndex={selectedImageIndex}
+                    onSelectImage={openImageForView}
+                    onRemoveImage={removeFile}
+                    onLoadPreview={loadPreview}
+                    fastDelete={true}
+                  />
+                </div>
+              )}
+
+              <div className="flex-1 flex items-center justify-center">
               {selectedFiles.length === 0 ? (
                 <motion.div
                   initial={{ opacity: 0, y: 20 }}
@@ -790,10 +637,31 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
                           </p>
                         </Button>
                       </div>
+                      <div className="mt-4">
+                        <Button
+                          size="lg"
+                          className="text-white font-bold text-lg rounded-full hover:scale-105 transition-all duration-300 flex items-center justify-center border border-white/60 h-[42px]"
+                          radius="full"
+                          style={{
+                            padding: '13px 12px',
+                            backgroundColor: 'rgba(88, 75, 255, 0.4)',
+                            fontWeight: 400
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            analyzeImages();
+                          }}
+                          disabled={loading || selectedFiles.length === 0}
+                        >
+                          <img src="/images/ai-point.svg" alt="AI Point" />
+                          Начать анализ
+                        </Button>
+                      </div>
                     </>
                   )}
                 </motion.div>
               )}
+              </div>
             </div>
 
             {/* Индикатор загрузки */}
@@ -801,21 +669,15 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="mt-6 text-center"
+                className="mt-6 flex flex-col items-center gap-4"
               >
-                <Progress
-                  isIndeterminate
-                  aria-label="Обработка изображения"
-                  className="max-w-md mx-auto"
-                  color="primary"
-                  size="lg"
-                />
-                <p className="text-white/70 mt-4">Обработка изображения...</p>
+                <Loader />
+                <p className="text-white/70 text-lg">Обработка изображения...</p>
               </motion.div>
             )}
 
             {/* Поле ввода названия маршрута и кнопка "Начать анализ" */}
-            {selectedFiles.length > 0 && !loading && !analysisProgress && (
+            {/* {selectedFiles.length > 0 && !loading && !analysisProgress && (
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -853,7 +715,7 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
                   Начать анализ
                 </Button>
               </motion.div>
-            )}
+            )} */}
           </motion.div>
       </AnimatePresence>
 

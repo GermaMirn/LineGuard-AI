@@ -124,6 +124,19 @@ async def get_task_images(
     return list(result.scalars()), total
 
 
+async def get_image(
+    session: AsyncSession,
+    image_id: UUID,
+    task_id: Optional[UUID] = None,
+) -> Optional[AnalysisImage]:
+    """Получить изображение по ID, опционально проверить принадлежность к задаче"""
+    stmt = select(AnalysisImage).where(AnalysisImage.id == image_id)
+    if task_id:
+        stmt = stmt.where(AnalysisImage.task_id == task_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def update_image(
     session: AsyncSession,
     image_id: UUID,
@@ -180,4 +193,83 @@ async def set_task_archives(
     session.add(task)
     await session.flush()
     return task
+
+
+async def delete_image(
+    session: AsyncSession,
+    task_id: UUID,
+    image_id: UUID,
+) -> Optional[dict]:
+    """Удалить изображение из задачи"""
+    stmt = select(AnalysisImage).where(
+        AnalysisImage.id == image_id,
+        AnalysisImage.task_id == task_id
+    )
+    result = await session.execute(stmt)
+    image = result.scalar_one_or_none()
+    
+    if not image:
+        return None
+    
+    # Загружаем задачу ДО удаления изображения
+    task = await get_task(session, task_id)
+    if not task:
+        return None
+    
+    # Сохраняем данные ДО удаления
+    file_ids = [image.file_id]
+    if image.result_file_id:
+        file_ids.append(image.result_file_id)
+    image_status = image.status
+    
+    # Обновляем счетчики задачи ДО удаления изображения
+    task.total_files = max(0, task.total_files - 1)
+    if image_status == AnalysisStatus.COMPLETED:
+        task.processed_files = max(0, task.processed_files - 1)
+    task.updated_at = datetime.utcnow()
+    
+    # Удаляем запись из БД
+    await session.delete(image)
+    await session.flush()
+    
+    # Возвращаем словарь с file_ids для удаления файлов
+    return {"file_ids_to_delete": file_ids}
+
+
+async def delete_task(
+    session: AsyncSession,
+    task_id: UUID,
+) -> Optional[dict]:
+    """Удалить задачу и все её изображения"""
+    # Загружаем задачу
+    task = await get_task(session, task_id)
+    if not task:
+        return None
+    
+    # Получаем все изображения задачи
+    stmt = select(AnalysisImage).where(AnalysisImage.task_id == task_id)
+    result = await session.execute(stmt)
+    images = result.scalars().all()
+    
+    # Собираем все file_ids для удаления
+    file_ids_to_delete = []
+    for image in images:
+        file_ids_to_delete.append(image.file_id)
+        if image.result_file_id:
+            file_ids_to_delete.append(image.result_file_id)
+    
+    # Добавляем ID архива с результатами если есть
+    if task.results_archive_file_id:
+        file_ids_to_delete.append(task.results_archive_file_id)
+    
+    # Удаляем все изображения
+    for image in images:
+        await session.delete(image)
+    
+    # Удаляем задачу
+    await session.delete(task)
+    await session.flush()
+    
+    # Возвращаем словарь с file_ids для удаления файлов
+    return {"file_ids_to_delete": file_ids_to_delete}
 

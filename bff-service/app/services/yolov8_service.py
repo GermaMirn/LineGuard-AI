@@ -1,5 +1,5 @@
 import httpx
-from typing import Dict, Any
+from typing import Dict, Any, List
 from fastapi import HTTPException, status, UploadFile
 from app.core.config import get_settings
 import logging
@@ -150,5 +150,87 @@ class YOLOv8Service:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Ошибка при получении информации о модели: {str(e)}"
+            )
+
+    async def batch_predict_bytes(
+        self,
+        files_data: List[Dict[str, Any]],  # [{"filename": str, "content": bytes, "content_type": str}, ...]
+        conf: float = 0.25,
+    ) -> Dict[str, Any]:
+        """Отправить массив файлов в YOLOv8 сервис для batch предсказания"""
+        try:
+            # Подготавливаем files для multipart/form-data
+            files = []
+            for file_info in files_data:
+                filename = file_info["filename"]
+                content = file_info["content"]
+                content_type = file_info.get("content_type", "application/octet-stream")
+                
+                # Проверка размера каждого файла
+                max_bytes = settings.MAX_YOLO_FILE_SIZE_MB * 1024 * 1024
+                if len(content) > max_bytes:
+                    logger.warning(f"Файл {filename} превышает максимальный размер {settings.MAX_YOLO_FILE_SIZE_MB}MB")
+                    continue
+                
+                files.append(("files", (filename, content, content_type)))
+
+            if not files:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Нет валидных файлов для обработки"
+                )
+
+            logger.info(
+                "Отправка batch запроса в YOLOv8: %s файлов, conf=%s",
+                len(files),
+                conf,
+            )
+
+            async with httpx.AsyncClient(timeout=120.0) as client:  # Увеличенный таймаут для batch
+                params = {"conf": conf} if conf != 0.25 else {}
+                response = await client.post(
+                    f"{self.yolov8_service_url}/predict/batch",
+                    files=files,
+                    params=params,
+                )
+
+                if response.status_code != 200:
+                    logger.error(
+                        "Ошибка от YOLOv8 сервиса: %s - %s",
+                        response.status_code,
+                        response.text,
+                    )
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"Ошибка от YOLOv8 сервиса: {response.text}",
+                    )
+
+                result = response.json()
+                logger.info(
+                    "Batch детекция завершена: обработано %s файлов, успешно %s",
+                    result.get("total", 0),
+                    result.get("total", 0) - result.get("failed", 0),
+                )
+                return result
+
+        except httpx.TimeoutException:
+            logger.error("Таймаут при обращении к YOLOv8 сервису")
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="Таймаут при обращении к YOLOv8 сервису. Попробуйте позже.",
+            )
+        except httpx.ConnectError:
+            logger.error("Не удалось подключиться к YOLOv8 сервису: %s", self.yolov8_service_url)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="YOLOv8 сервис недоступен. Проверьте, что сервис запущен.",
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Ошибка при обработке batch запроса: %s", str(e), exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Ошибка при обработке batch запроса: {str(e)}",
             )
 

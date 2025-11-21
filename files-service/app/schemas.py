@@ -49,3 +49,13 @@ class FileListResponse(BaseModel):
     files: list[FileResponse]
     total: int
 
+class BatchFileUploadResponse(BaseModel):
+    """Response for batch file upload"""
+    files: list[FileUploadResponse]
+    total: int
+    failed: int = 0
+    errors: Optional[list[dict]] = None
+
+    class Config:
+        from_attributes = True
+

@@ -267,13 +267,34 @@ async def process_task(payload: Dict[str, Any], exchange) -> None:
             results_zip.writestr(normal_folder, b"")
 
             # Обрабатываем превью файлы (первые 10, уже в БД)
+            # Оптимизация: скачиваем все preview файлы одним batch-запросом
+            preview_files_data = {}
+            if preview_images:
+                try:
+                    file_ids = [str(image["file_id"]) for image in preview_images]
+                    batch_result = await files_service.batch_download_files(file_ids)
+
+                    # Создаем словарь для быстрого поиска по file_id
+                    for file_data in batch_result.get("files", []):
+                        preview_files_data[file_data["file_id"]] = file_data["content"]
+
+                    logger.info(f"Batch скачивание preview файлов: {len(preview_files_data)}/{len(file_ids)} успешно")
+                except Exception as e:
+                    logger.warning(f"Ошибка batch скачивания preview файлов: {e}. Используем fallback.")
+
             for image in preview_images:
                 image_id = image["id"]
                 safe_name = Path(image["file_name"]).name
                 try:
                     await update_image(image_id, status=AnalysisStatus.PROCESSING)
-                    original_bytes = await files_service.download_file(str(image["file_id"]))
-                    # Входные файлы не сохраняем в ZIP
+
+                    # Используем данные из batch download или fallback на индивидуальное скачивание
+                    file_id_str = str(image["file_id"])
+                    if file_id_str in preview_files_data:
+                        original_bytes = preview_files_data[file_id_str]
+                    else:
+                        logger.warning(f"Файл {file_id_str} не найден в batch, скачиваем отдельно")
+                        original_bytes = await files_service.download_file(file_id_str)
 
                     mime_type = mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
                     result = await yolo_service.predict_bytes(
@@ -356,121 +377,152 @@ async def process_task(payload: Dict[str, Any], exchange) -> None:
                     )
 
             # Обрабатываем файлы из архива (остальные 49,990) - теперь сохраняем ВСЕ в БД
-            for archive_file in archive_images:
-                safe_name = archive_file["file_name"]
-                original_bytes = archive_file["data"]
-                file_size = archive_file["file_size"]
+            # Оптимизация: загружаем файлы батчами по 100 штук
+            BATCH_SIZE = 100
+            for batch_start in range(0, len(archive_images), BATCH_SIZE):
+                batch_end = min(batch_start + BATCH_SIZE, len(archive_images))
+                current_batch = archive_images[batch_start:batch_end]
 
-                # Создаём запись в БД для каждого файла из архива
-                async with get_session() as session:
-                    # Сохраняем оригинальный файл в files-service
-                    original_upload = await files_service.upload_bytes(
-                        data=original_bytes,
-                        filename=safe_name,
-                        content_type=mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
+                # Подготавливаем batch данных для загрузки
+                batch_upload_data = []
+                for archive_file in current_batch:
+                    safe_name = archive_file["file_name"]
+                    original_bytes = archive_file["data"]
+                    mime_type = mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+
+                    batch_upload_data.append({
+                        "data": original_bytes,
+                        "filename": safe_name,
+                        "content_type": mime_type,
+                    })
+
+                # Batch-загрузка файлов (один запрос вместо N)
+                try:
+                    batch_result = await files_service.batch_upload_bytes(
+                        files_data=batch_upload_data,
                         project_id=str(task_id),
                         file_type="ANALYSIS_ORIGINAL",
                     )
 
-                    # Создаём запись AnalysisImage
-                    new_image = await analysis_tasks_service.add_images(
-                        session,
-                        task_id,
-                        [{
-                            "file_id": UUID(original_upload["id"]),
-                            "file_name": safe_name,
-                            "file_size": file_size,
-                        }]
-                    )
-                    image_id = new_image[0].id if new_image else None
+                    uploaded_files = batch_result.get("files", [])
 
-                try:
-                    await update_image(image_id, status=AnalysisStatus.PROCESSING) if image_id else None
+                    # Создаём записи в БД для всех загруженных файлов
+                    async with get_session() as session:
+                        image_records_data = []
+                        for i, uploaded_file in enumerate(uploaded_files):
+                            image_records_data.append({
+                                "file_id": UUID(uploaded_file["id"]),
+                                "file_name": uploaded_file["file_name"],
+                                "file_size": uploaded_file["file_size"],
+                            })
 
-                    mime_type = mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
-                    result = await yolo_service.predict_bytes(
-                        filename=safe_name,
-                        content=original_bytes,
-                        content_type=mime_type,
-                        conf=conf,
-                    )
-
-                    detections = result.get("detections", [])
-                    annotated_bytes = draw_annotations(original_bytes, detections)
-                    annotated_name = f"{Path(safe_name).stem}_annotated.jpg"
-
-                    # Определяем папку в зависимости от наличия дефектов
-                    has_defects = result.get("has_defects", False)
-                    folder_name = "Поврежденные" if has_defects else "Неповрежденные"
-                    zip_path = f"results/{folder_name}/{annotated_name}"
-
-                    # Используем ZipInfo для правильной кодировки UTF-8
-                    zip_info = zipfile.ZipInfo(zip_path)
-                    # Устанавливаем флаг UTF-8 (0x800) для поддержки кириллицы в именах файлов
-                    zip_info.flag_bits |= 0x800
-                    zip_info.compress_type = zipfile.ZIP_DEFLATED
-                    results_zip.writestr(zip_info, annotated_bytes)
-
-                    metadata["total_objects"] += result.get("total_objects", 0)
-                    metadata["defects_found"] += result.get("defects_count", 0)
-                    stats.update(result.get("statistics") or {})
-                    if result.get("has_defects"):
-                        defects_found += result.get("defects_count", 0)
-
-                    # Сохраняем результат в БД
-                    if image_id:
-                        await update_image(
-                            image_id,
-                            status=AnalysisStatus.COMPLETED,
-                            summary=result,
+                        new_images = await analysis_tasks_service.add_images(
+                            session,
+                            task_id,
+                            image_records_data
                         )
 
-                    # Для превью
-                    preview_candidate = {
-                        "image_id": image_id,
-                        "annotations": annotated_bytes,
-                        "summary": result,
-                        "file_name": annotated_name,
-                    }
+                    # Обрабатываем каждый файл из batch
+                    for idx, archive_file in enumerate(current_batch):
+                        if idx >= len(new_images):
+                            logger.warning(f"Файл {archive_file['file_name']} не был добавлен в БД")
+                            continue
 
-                    if result.get("has_defects"):
-                        if len(preview_queue_defect) < preview_limit:
-                            preview_queue_defect.append(preview_candidate)
-                    elif len(preview_queue_regular) < preview_limit:
-                        preview_queue_regular.append(preview_candidate)
+                        image_id = new_images[idx].id
+                        safe_name = archive_file["file_name"]
+                        original_bytes = archive_file["data"]
 
-                    processed += 1
+                        try:
+                            await update_image(image_id, status=AnalysisStatus.PROCESSING)
 
-                except Exception as exc:
-                    logger.exception("Ошибка обработки файла из архива %s: %s", safe_name, exc)
-                    failed += 1
-                    if image_id:
-                        await update_image(
-                            image_id,
-                            status=AnalysisStatus.FAILED,
-                            error_message=str(exc),
-                        )
+                            mime_type = mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+                            result = await yolo_service.predict_bytes(
+                                filename=safe_name,
+                                content=original_bytes,
+                                content_type=mime_type,
+                                conf=conf,
+                            )
 
-                # Обновляем статус каждые 100 файлов для производительности
-                if processed % 100 == 0 or failed % 100 == 0:
-                    await update_task_status(
-                        task_id,
-                        processed_files=processed,
-                        failed_files=failed,
-                        defects_found=defects_found,
-                    )
-                    await publish_update(
-                        exchange,
-                        {
-                            "task_id": str(task_id),
-                            "status": AnalysisStatus.PROCESSING.value,
-                            "processed_files": processed,
-                            "total_files": total_files,
-                            "failed_files": failed,
-                            "defects_found": defects_found,
-                            "message": f"Обработано {processed}/{total_files} файлов",
-                        },
-                    )
+                            detections = result.get("detections", [])
+                            annotated_bytes = draw_annotations(original_bytes, detections)
+                            annotated_name = f"{Path(safe_name).stem}_annotated.jpg"
+
+                            # Определяем папку в зависимости от наличия дефектов
+                            has_defects = result.get("has_defects", False)
+                            folder_name = "Поврежденные" if has_defects else "Неповрежденные"
+                            zip_path = f"results/{folder_name}/{annotated_name}"
+
+                            # Используем ZipInfo для правильной кодировки UTF-8
+                            zip_info = zipfile.ZipInfo(zip_path)
+                            # Устанавливаем флаг UTF-8 (0x800) для поддержки кириллицы в именах файлов
+                            zip_info.flag_bits |= 0x800
+                            zip_info.compress_type = zipfile.ZIP_DEFLATED
+                            results_zip.writestr(zip_info, annotated_bytes)
+
+                            metadata["total_objects"] += result.get("total_objects", 0)
+                            metadata["defects_found"] += result.get("defects_count", 0)
+                            stats.update(result.get("statistics") or {})
+                            if result.get("has_defects"):
+                                defects_found += result.get("defects_count", 0)
+
+                            # Сохраняем результат в БД
+                            await update_image(
+                                image_id,
+                                status=AnalysisStatus.COMPLETED,
+                                summary=result,
+                            )
+
+                            # Для превью
+                            preview_candidate = {
+                                "image_id": image_id,
+                                "annotations": annotated_bytes,
+                                "summary": result,
+                                "file_name": annotated_name,
+                            }
+
+                            if result.get("has_defects"):
+                                if len(preview_queue_defect) < preview_limit:
+                                    preview_queue_defect.append(preview_candidate)
+                            elif len(preview_queue_regular) < preview_limit:
+                                preview_queue_regular.append(preview_candidate)
+
+                            processed += 1
+
+                        except Exception as exc:
+                            logger.exception("Ошибка обработки файла из архива %s: %s", safe_name, exc)
+                            failed += 1
+                            await update_image(
+                                image_id,
+                                status=AnalysisStatus.FAILED,
+                                error_message=str(exc),
+                            )
+
+                        # Обновляем статус каждые 100 файлов для производительности
+                        if processed % 100 == 0 or failed % 100 == 0:
+                            await update_task_status(
+                                task_id,
+                                processed_files=processed,
+                                failed_files=failed,
+                                defects_found=defects_found,
+                            )
+                            await publish_update(
+                                exchange,
+                                {
+                                    "task_id": str(task_id),
+                                    "status": AnalysisStatus.PROCESSING.value,
+                                    "processed_files": processed,
+                                    "total_files": total_files,
+                                    "failed_files": failed,
+                                    "defects_found": defects_found,
+                                    "message": f"Обработано {processed}/{total_files} файлов",
+                                },
+                            )
+
+                except Exception as batch_exc:
+                    logger.exception("Ошибка batch-загрузки файлов: %s", batch_exc)
+                    # Если batch-загрузка не удалась, отмечаем все файлы как failed
+                    failed += len(current_batch)
+                    continue
 
         # Вычисляем проценты по типам объектов
         total_objects_for_stats = metadata["total_objects"]

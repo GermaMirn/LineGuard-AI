@@ -62,3 +62,10 @@ class HealthResponse(BaseModel):
         'protected_namespaces': ()
     }
 
+class BatchPredictResponse(BaseModel):
+    """Response for batch prediction"""
+    results: List[PredictResponse]
+    total: int
+    failed: int = 0
+    errors: Optional[List[Dict[str, Any]]] = None
+

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import TaskHistoryContents from "../components/TaskHistoryContents";
+import Loader from "@/components/Loader";
 import apiClient from "@/shared/api/axios";
 
 interface TaskItemData {
@@ -130,7 +131,7 @@ export default function HistoryPage() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#1a1a2e] to-[#16213e]">
         <div className="flex flex-col items-center gap-4">
-          <div className="w-16 h-16 border-4 border-white/20 border-t-white rounded-full animate-spin"></div>
+          <Loader />
           <p className="text-white/80 text-lg">Загрузка истории...</p>
         </div>
       </div>
@@ -149,8 +150,10 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#1a1a2e] to-[#16213e]">
-      <TaskHistoryContents tasks={tasks} />
+    <div className="h-screen bg-gradient-to-br from-[#1a1a2e] to-[#16213e] overflow-hidden">
+      <div className="h-full flex flex-col" style={{ padding: '42px 96px 48px' }}>
+        <TaskHistoryContents tasks={tasks} />
+      </div>
     </div>
   );
 }

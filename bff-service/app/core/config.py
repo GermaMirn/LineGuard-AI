@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     AUTH_SERVICE_URL: str = "http://auth-service:8002"
     FILES_SERVICE_URL: str = "http://files-service:8006"
     YOLOV8_SERVICE_URL: str = "http://yolov8-model-service:8000"
+    ANNOTATION_SERVICE_URL: str = "http://annotation-service:8000"
 
     # Аналитика / задачи (используем общую БД postgres-db)
     ANALYSIS_DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@postgres-db:5432/postgres-db"

@@ -87,3 +87,18 @@ code {
   max-height: 38px;
 }
 
+/* Скрытие скроллбара для ScrollShadow */
+.hide-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.hide-scrollbar::-webkit-scrollbar-track {
+  display: none !important;
+}
+
+.hide-scrollbar::-webkit-scrollbar-thumb {
+  display: none !important;
+}
+

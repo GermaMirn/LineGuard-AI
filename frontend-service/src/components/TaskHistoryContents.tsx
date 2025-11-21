@@ -15,15 +15,17 @@ interface TaskItemData {
 
 interface TaskHistoryContentsProps {
   tasks: TaskItemData[];
+  onTaskDeleted?: (taskId: string) => void;
 }
 
 interface TaskItemProps {
   task: TaskItemData;
   formatDate: (date: string) => string;
   onOpenTask: (taskId: string) => void;
+  onDeleteTask: (taskId: string) => void;
 }
 
-function TaskItem({ task, formatDate, onOpenTask }: TaskItemProps) {
+function TaskItem({ task, formatDate, onOpenTask, onDeleteTask }: TaskItemProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
   const menuRef = useRef<HTMLDivElement>(null);
@@ -94,6 +96,11 @@ function TaskItem({ task, formatDate, onOpenTask }: TaskItemProps) {
       return;
     }
     onOpenTask(task.id);
+    setIsMenuOpen(false);
+  };
+
+  const handleDeleteTask = () => {
+    onDeleteTask(task.id);
     setIsMenuOpen(false);
   };
 
@@ -250,6 +257,15 @@ function TaskItem({ task, formatDate, onOpenTask }: TaskItemProps) {
             >
               {isProcessing ? "Задача в обработке..." : "Открыть задачу"}
             </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDeleteTask();
+              }}
+              className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-white/10 transition-colors"
+            >
+              Удалить задачу
+            </button>
           </div>
         )}
       </div>
@@ -260,7 +276,7 @@ function TaskItem({ task, formatDate, onOpenTask }: TaskItemProps) {
 type SortType = "created_at" | "status" | "total_files" | "defects_found" | null;
 type SortDirection = "asc" | "desc";
 
-export default function TaskHistoryContents({ tasks }: TaskHistoryContentsProps) {
+export default function TaskHistoryContents({ tasks, onTaskDeleted }: TaskHistoryContentsProps) {
   const [sortType, setSortType] = useState<SortType>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
@@ -374,12 +390,37 @@ export default function TaskHistoryContents({ tasks }: TaskHistoryContentsProps)
       setSortType(type);
       setSortDirection("asc");
     }
-    setIsFilterMenuOpen(false);
+    // Меню не закрывается после выбора
   }, [sortType, sortDirection]);
 
   const handleOpenTask = useCallback((taskId: string) => {
     navigate(`/analysis?task_id=${taskId}`);
   }, [navigate]);
+
+  // Удаление задачи
+  const handleDeleteTask = useCallback(async (taskId: string) => {
+    try {
+      const BFF_SERVICE_URL = (import.meta as any).env?.VITE_BFF_SERVICE_URL || "/api";
+      const response = await fetch(
+        `${BFF_SERVICE_URL}/analysis/tasks/${taskId}`,
+        {
+          method: 'DELETE',
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error('Failed to delete task');
+      }
+
+      // Если задача была удалена успешно, вызываем callback с taskId
+      if (onTaskDeleted) {
+        onTaskDeleted(taskId);
+      }
+    } catch (error) {
+      console.error('Error deleting task:', error);
+      alert('Не удалось удалить задачу');
+    }
+  }, [onTaskDeleted]);
 
   return (
     <motion.div
@@ -389,11 +430,10 @@ export default function TaskHistoryContents({ tasks }: TaskHistoryContentsProps)
       exit={{ opacity: 0, scale: 0.95 }}
       transition={{ duration: 0.3 }}
       className="w-full h-full flex flex-col gap-6"
-      style={{ padding: '128px 96px' }}
     >
-      <div className="space-y-8">
+      <div className="space-y-8 flex-1 flex flex-col">
         {/* История задач */}
-        <div className="relative mb-6 h-[600px] border border-white/20 rounded-xl flex flex-col bg-white/5">
+        <div className="relative flex-1 border border-white/20 rounded-xl flex flex-col bg-white/5">
           <div className="p-4 flex flex-wrap gap-4 items-center justify-between">
             <div>
               <p className="font-bold text-lg">История анализов</p>
@@ -411,37 +451,9 @@ export default function TaskHistoryContents({ tasks }: TaskHistoryContentsProps)
                     fontWeight: 400
                   }}
                 >
-                  <div className="flex flex-col mr-2">
-                    <svg
-                      className={`w-3 h-3 ${sortType && sortDirection === "asc" ? "opacity-100" : "opacity-50"}`}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M5 15l7-7 7 7"
-                      />
-                    </svg>
-                    <svg
-                      className={`w-3 h-3 ${sortType && sortDirection === "desc" ? "opacity-100" : "opacity-50"}`}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M19 9l-7 7-7-7"
-                      />
-                    </svg>
-                  </div>
                   <span>Фильтрация</span>
                   <svg
-                    className="w-4 h-4 ml-2"
+                    className={`w-4 h-4 ml-2 transition-transform ${isFilterMenuOpen ? 'rotate-180' : ''}`}
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -485,7 +497,7 @@ export default function TaskHistoryContents({ tasks }: TaskHistoryContentsProps)
                             strokeLinecap="round"
                             strokeLinejoin="round"
                             strokeWidth={2}
-                            d="M5 13l4 4L19 7"
+                            d={sortDirection === "asc" ? "M5 15l7-7 7 7" : "M19 9l-7 7-7-7"}
                           />
                         </svg>
                       )}
@@ -510,7 +522,7 @@ export default function TaskHistoryContents({ tasks }: TaskHistoryContentsProps)
                             strokeLinecap="round"
                             strokeLinejoin="round"
                             strokeWidth={2}
-                            d="M5 13l4 4L19 7"
+                            d={sortDirection === "asc" ? "M5 15l7-7 7 7" : "M19 9l-7 7-7-7"}
                           />
                         </svg>
                       )}
@@ -535,7 +547,7 @@ export default function TaskHistoryContents({ tasks }: TaskHistoryContentsProps)
                             strokeLinecap="round"
                             strokeLinejoin="round"
                             strokeWidth={2}
-                            d="M5 13l4 4L19 7"
+                            d={sortDirection === "asc" ? "M5 15l7-7 7 7" : "M19 9l-7 7-7-7"}
                           />
                         </svg>
                       )}
@@ -560,7 +572,7 @@ export default function TaskHistoryContents({ tasks }: TaskHistoryContentsProps)
                             strokeLinecap="round"
                             strokeLinejoin="round"
                             strokeWidth={2}
-                            d="M5 13l4 4L19 7"
+                            d={sortDirection === "asc" ? "M5 15l7-7 7 7" : "M19 9l-7 7-7-7"}
                           />
                         </svg>
                       )}
@@ -611,6 +623,7 @@ export default function TaskHistoryContents({ tasks }: TaskHistoryContentsProps)
                     task={task}
                     formatDate={formatDate}
                     onOpenTask={handleOpenTask}
+                    onDeleteTask={handleDeleteTask}
                   />
                 ))
               )}

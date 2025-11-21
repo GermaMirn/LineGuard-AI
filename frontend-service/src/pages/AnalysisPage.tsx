@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Progress } from "@heroui/react";
 import { motion } from "framer-motion";
 import AnalysisContent from "@/components/AnalysisContent";
 import HistoryContent from "@/components/HistoryContent";
 import AnalysisHistoryContents from "@/components/AnalysisHistoryContents";
+import Loader from "@/components/Loader";
 import apiClient from "@/shared/api/axios";
 
 interface TaskImageResponse {
@@ -20,6 +20,7 @@ interface TaskImageResponse {
   created_at: string;
   original_url: string;
   result_url?: string | null;
+  thumbnail?: string | null;  // base64 thumbnail для оптимизации
 }
 
 export default function AnalysisPage() {
@@ -35,6 +36,7 @@ export default function AnalysisPage() {
   const [taskImages, setTaskImages] = useState<TaskImageResponse[]>([]);
   const [taskImagesTotal, setTaskImagesTotal] = useState<number>(0);
   const [isViewingImage, setIsViewingImage] = useState(false);
+  const [routeName, setRouteName] = useState<string | null>(null);
 
   useEffect(() => {
     if (!taskId) {
@@ -52,6 +54,7 @@ export default function AnalysisPage() {
             params: {
               skip: 0,
               limit: 50,
+              include_thumbnails: true,
             },
           }),
         ]);
@@ -61,6 +64,9 @@ export default function AnalysisPage() {
           images: TaskImageResponse[];
           total: number;
         };
+
+        // Сохраняем название маршрута
+        setRouteName(taskData.route_name || null);
 
         // Преобразуем данные задачи в формат Results для отображения
         if (taskData.metadata) {
@@ -131,13 +137,21 @@ export default function AnalysisPage() {
         style={{ borderRight: '1px solid rgba(255, 255, 255, 0.1)' }}
       >
         {/* Логотип вверху или стрелка назад */}
-        {isViewingImage && currentModel === 'analysis' && !taskId ? (
+        {isViewingImage ? (
           <button
             onClick={() => {
               setIsViewingImage(false);
-              // Вызываем функцию закрытия просмотра из AnalysisContent
-              if ((window as any).__closeImageView) {
-                (window as any).__closeImageView();
+              // Вызываем функцию закрытия просмотра
+              if (currentModel === 'analysis' && !taskId) {
+                // Для страницы загрузки файлов
+                if ((window as any).__closeImageView) {
+                  (window as any).__closeImageView();
+                }
+              } else if (taskId) {
+                // Для страницы истории с task_id
+                if ((window as any).__closeHistoryImageView) {
+                  (window as any).__closeHistoryImageView();
+                }
               }
             }}
             className="p-2 rounded-lg hover:bg-white/10 transition-colors"
@@ -249,16 +263,10 @@ export default function AnalysisPage() {
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="text-center"
+                className="flex flex-col items-center gap-4"
               >
-                <Progress
-                  isIndeterminate
-                  aria-label="Загрузка данных"
-                  className="max-w-md mx-auto"
-                  color="primary"
-                  size="lg"
-                />
-                <p className="text-white/70 mt-4">Загрузка данных задачи...</p>
+                <Loader />
+                <p className="text-white/70 text-lg">Загрузка данных задачи...</p>
               </motion.div>
             </div>
           ) : error ? (
@@ -279,8 +287,16 @@ export default function AnalysisPage() {
               results={results}
               processedFilesCount={processedFilesCount}
               resultsArchiveFileId={resultsArchiveFileId}
+              routeName={routeName}
               images={taskImages}
               totalImages={taskImagesTotal}
+              taskId={taskId}
+              onImageDeleted={(imageId: string) => {
+                // Удаляем изображение из локального состояния
+                setTaskImages((prevImages) => prevImages.filter((img) => img.id !== imageId));
+                setTaskImagesTotal((prevTotal) => Math.max(0, prevTotal - 1));
+              }}
+              onViewModeChange={setIsViewingImage}
             />
           ) : null
         ) : (
