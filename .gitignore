@@ -29,7 +29,6 @@ real_dataset/
 dataset_for_colab.tar.gz
 
 # Models (большие файлы)
-models/*.pt
 models/*.pth
 models/*.onnx
 

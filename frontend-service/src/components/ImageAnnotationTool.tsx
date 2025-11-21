@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, memo } from 'react';
 import { motion } from 'framer-motion';
 import { Button } from '@heroui/react';
 
@@ -19,9 +19,10 @@ interface ImageAnnotationToolProps {
   projectId: string; // project_id для сохранения файла
   onClose: () => void;
   onSave?: (bboxes: BBox[]) => void;
+  onImageUpdated?: () => void; // Callback для обновления изображения после сохранения
 }
 
-export default function ImageAnnotationTool({
+function ImageAnnotationTool({
   imageUrl,
   imageId,
   taskId,
@@ -29,6 +30,7 @@ export default function ImageAnnotationTool({
   projectId,
   onClose,
   onSave,
+  onImageUpdated,
 }: ImageAnnotationToolProps) {
   const [bboxes, setBboxes] = useState<BBox[]>([]);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -212,8 +214,19 @@ export default function ImageAnnotationTool({
         onSave(bboxes);
       }
 
-      alert('Области успешно сохранены!');
-      onClose();
+      // Уведомляем о обновлении изображения СРАЗУ
+      if (onImageUpdated) {
+        onImageUpdated();
+      }
+
+      // Даем время на обновление версии изображения и перерендер компонента
+      // Затем закрываем модалку и показываем уведомление
+      setTimeout(() => {
+        // Показываем уведомление об успешном сохранении
+        alert('Области успешно сохранены!');
+        // Закрываем инструмент аннотации после обновления изображения
+        onClose();
+      }, 400);
     } catch (error) {
       console.error('Error saving annotations:', error);
       alert('Не удалось сохранить области');
@@ -273,11 +286,38 @@ export default function ImageAnnotationTool({
         >
           <div className="relative inline-block">
             <img
+              key={`annotation-${imageUrl}`}
               ref={imageRef}
               src={imageUrl}
               alt="Annotation"
               className="max-w-full max-h-full object-contain"
               draggable={false}
+              onLoad={() => {
+                // Перерисовываем canvas после загрузки изображения
+                const canvas = canvasRef.current;
+                const image = imageRef.current;
+                if (!canvas || !image) return;
+
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return;
+
+                // Обновляем размер canvas под размер изображения
+                canvas.width = image.offsetWidth;
+                canvas.height = image.offsetHeight;
+
+                // Перерисовываем bboxes
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                bboxes.forEach((bbox) => {
+                  ctx.strokeStyle = '#EF4444';
+                  ctx.lineWidth = 2;
+                  ctx.strokeRect(bbox.x, bbox.y, bbox.width, bbox.height);
+                  if (bbox.label) {
+                    ctx.fillStyle = '#EF4444';
+                    ctx.font = '14px Arial';
+                    ctx.fillText(bbox.label, bbox.x, bbox.y - 5);
+                  }
+                });
+              }}
             />
             <canvas
               ref={canvasRef}
@@ -295,4 +335,7 @@ export default function ImageAnnotationTool({
     </div>
   );
 }
+
+// Экспортируем мемоизированную версию компонента
+export default memo(ImageAnnotationTool);
 

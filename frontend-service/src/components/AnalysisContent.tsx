@@ -671,7 +671,6 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
                 animate={{ opacity: 1 }}
                 className="mt-6 flex flex-col items-center gap-4"
               >
-                <Loader />
                 <p className="text-white/70 text-lg">Обработка изображения...</p>
               </motion.div>
             )}

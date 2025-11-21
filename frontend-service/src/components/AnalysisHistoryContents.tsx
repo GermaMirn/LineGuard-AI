@@ -82,6 +82,35 @@ interface FileItemProps {
   onDeleteImage: (imageId: string) => void;
 }
 
+// Мемоизированный компонент изображения
+interface ImageViewerProps {
+  imageUrl: string | null;
+  imageName: string;
+  imageVersion: number;
+  imageId: string;
+  viewMode: 'original' | 'result';
+}
+
+const ImageViewer = memo(({ imageUrl, imageName, imageVersion, imageId, viewMode }: ImageViewerProps) => {
+  return (
+    <div className="relative inline-block max-w-full max-h-full">
+      <img
+        key={`${imageId}-${viewMode}-${imageVersion}`}
+        src={imageUrl || undefined}
+        alt={imageName}
+        className="object-contain"
+        style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }}
+        onLoad={() => {
+          // Изображение загрузилось успешно
+          console.log('Image loaded:', imageUrl);
+        }}
+      />
+    </div>
+  );
+});
+
+ImageViewer.displayName = 'ImageViewer';
+
 const FileItem = memo(({ image, previewUrl, hasDefects, formatFileSize, onOpenImage, onDeleteImage }: FileItemProps) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
@@ -419,6 +448,7 @@ export default function AnalysisHistoryContents({
   const [viewMode, setViewMode] = useState<'original' | 'result'>('original');
   const [, setShowMetricsPanel] = useState<boolean>(false);
   const [isAnnotationMode, setIsAnnotationMode] = useState<boolean>(false);
+  const [imageVersion, setImageVersion] = useState<number>(0); // Версия изображения для принудительной перезагрузки
 
   const BFF_SERVICE_URL = (import.meta as any).env?.VITE_BFF_SERVICE_URL;
 
@@ -644,6 +674,8 @@ export default function AnalysisHistoryContents({
     setSelectedImageForView(image);
     setSelectedImageIndex(index);
     setViewMode(mode);
+    // Сбрасываем версию изображения при смене изображения
+    setImageVersion(0);
     // Автоматически открываем панель метрик для режима результата
     setShowMetricsPanel(mode === 'result');
   }, [sortedImages]);
@@ -790,9 +822,15 @@ export default function AnalysisHistoryContents({
 
   // Если открыт просмотр - показываем только просмотр
   if (selectedImageForView && selectedImageIndex !== null) {
-    const currentImageUrl = viewMode === 'original'
+    // Добавляем версию к URL для принудительной перезагрузки изображения
+    const baseImageUrl = viewMode === 'original'
       ? resolveImageUrl(selectedImageForView.original_url)
       : resolveImageUrl(selectedImageForView.result_url);
+
+    // Добавляем параметр версии для обхода кеша браузера
+    const currentImageUrl = baseImageUrl
+      ? `${baseImageUrl}${baseImageUrl.includes('?') ? '&' : '?'}v=${imageVersion}`
+      : null;
 
     // Преобразуем изображения в формат для PhotoThumbnails
     const filesForThumbnails = sortedImages.map((img) => ({
@@ -801,9 +839,14 @@ export default function AnalysisHistoryContents({
       id: img.id,
     }));
 
-    const annotationImageUrl = viewMode === 'original'
+    // URL для аннотации (используем базовый URL без версии, так как это будет актуальное изображение)
+    const baseAnnotationImageUrl = viewMode === 'original'
       ? resolveImageUrl(selectedImageForView.original_url)
       : resolveImageUrl(selectedImageForView.result_url);
+
+    const annotationImageUrl = baseAnnotationImageUrl
+      ? `${baseAnnotationImageUrl}${baseAnnotationImageUrl.includes('?') ? '&' : '?'}v=${imageVersion}`
+      : null;
 
     return (
       <>
@@ -817,15 +860,16 @@ export default function AnalysisHistoryContents({
           <div className="flex-1 flex items-center justify-center overflow-hidden relative">
             {currentImageUrl ? (
               <div className="relative inline-block max-w-full max-h-full">
-                <img
-                  src={currentImageUrl}
-                  alt={selectedImageForView.file_name}
-                  className="object-contain"
-                  style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }}
+                <ImageViewer
+                  imageUrl={currentImageUrl}
+                  imageName={selectedImageForView.file_name}
+                  imageVersion={imageVersion}
+                  imageId={selectedImageForView.id}
+                  viewMode={viewMode}
                 />
 
                 {/* PhotoThumbnails компонент - по центру сверху на фотографии */}
-            <motion.div
+                <motion.div
               initial={{ opacity: 0, y: -20 }}
               animate={{ opacity: 1, y: 0 }}
                   className="absolute top-4 left-1/2 transform -translate-x-1/2 z-10"
@@ -836,6 +880,7 @@ export default function AnalysisHistoryContents({
                     onSelectImage={(_file, index) => {
                       setSelectedImageIndex(index);
                       setSelectedImageForView(sortedImages[index]);
+                      setImageVersion(0); // Сбрасываем версию при смене изображения
                     }}
                     onRemoveImage={handleRemoveImageFromView}
                     onLoadPreview={() => {}} // Превью уже загружены
@@ -843,6 +888,7 @@ export default function AnalysisHistoryContents({
                     onSelect={(index) => {
                       setSelectedImageIndex(index);
                       setSelectedImageForView(sortedImages[index]);
+                      setImageVersion(0); // Сбрасываем версию при смене изображения
                     }}
                   />
                 </motion.div>
@@ -853,6 +899,7 @@ export default function AnalysisHistoryContents({
                             onClick={() => {
                       setViewMode('original');
                       setShowMetricsPanel(false);
+                      setImageVersion(0); // Сбрасываем версию при смене режима
                     }}
                     className={`px-3 py-1.5 rounded-md transition-colors text-sm ${
                       viewMode === 'original'
@@ -866,6 +913,7 @@ export default function AnalysisHistoryContents({
                     onClick={() => {
                       setViewMode('result');
                       setShowMetricsPanel(true);
+                      setImageVersion(0); // Сбрасываем версию при смене режима
                     }}
                     disabled={!selectedImageForView.result_url}
                     className={`px-3 py-1.5 rounded-md transition-colors text-sm ${
@@ -1066,10 +1114,16 @@ export default function AnalysisHistoryContents({
               : selectedImageForView.file_id}
             projectId={taskId} // Используем taskId как project_id
             onClose={() => setIsAnnotationMode(false)}
-            onSave={() => {
-              // После сохранения можно обновить изображение
-              setIsAnnotationMode(false);
-              // Можно добавить обновление данных изображения
+            onImageUpdated={() => {
+              // Увеличиваем версию изображения для принудительной перезагрузки
+              // Это заставит браузер загрузить новое изображение с аннотациями
+              setImageVersion(prev => prev + 1);
+
+              // Небольшая задержка перед закрытием модалки, чтобы изображение успело обновиться
+              // Версия увеличится, annotationImageUrl пересчитается, и модалка получит новый imageUrl
+              setTimeout(() => {
+                // Модалка закроется автоматически после сохранения
+              }, 300);
             }}
           />
         )}
