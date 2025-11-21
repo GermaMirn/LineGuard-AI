@@ -20,6 +20,12 @@ interface ImageAnnotationToolProps {
   onClose: () => void;
   onSave?: (bboxes: BBox[]) => void;
   onImageUpdated?: () => void; // Callback для обновления изображения после сохранения
+  existingDetections?: Array<{
+    bbox: number[];
+    class_ru?: string;
+    class?: string;
+    is_manual?: boolean;
+  }>; // Существующие детекции для загрузки ручных аннотаций
 }
 
 function ImageAnnotationTool({
@@ -31,6 +37,7 @@ function ImageAnnotationTool({
   onClose,
   onSave,
   onImageUpdated,
+  existingDetections = [],
 }: ImageAnnotationToolProps) {
   const [bboxes, setBboxes] = useState<BBox[]>([]);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -44,6 +51,75 @@ function ImageAnnotationTool({
   const containerRef = useRef<HTMLDivElement>(null);
   const startPosRef = useRef<{ x: number; y: number } | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
+
+  // Загружаем существующие ручные аннотации при открытии инструмента
+  useEffect(() => {
+    if (existingDetections && existingDetections.length > 0) {
+      const image = imageRef.current;
+      if (!image) return;
+
+      // Ждем загрузки изображения
+      const loadExistingAnnotations = () => {
+        const imageWidth = image.naturalWidth;
+        const imageHeight = image.naturalHeight;
+        const displayWidth = image.offsetWidth;
+        const displayHeight = image.offsetHeight;
+
+        const existingBboxes: BBox[] = existingDetections
+          .filter((detection) => detection.is_manual)
+          .map((detection) => {
+            const bbox = detection.bbox || [];
+            if (bbox.length !== 4) return null;
+
+            // Преобразуем из абсолютных координат [x1, y1, x2, y2] в относительные [x, y, width, height]
+            const [x1, y1, x2, y2] = bbox;
+            const width = x2 - x1;
+            const height = y2 - y1;
+
+            // Конвертируем обратно в координаты отображения
+            const x = (x1 / imageWidth) * displayWidth;
+            const y = (y1 / imageHeight) * displayHeight;
+            const displayWidth_scaled = (width / imageWidth) * displayWidth;
+            const displayHeight_scaled = (height / imageHeight) * displayHeight;
+
+            const result: BBox = {
+              id: `existing-${Date.now()}-${Math.random()}`,
+              x: Math.round(x),
+              y: Math.round(y),
+              width: Math.round(displayWidth_scaled),
+              height: Math.round(displayHeight_scaled),
+              is_defect: true, // По умолчанию, можно улучшить, если есть defect_summary
+            };
+
+            if (detection.class_ru || detection.class) {
+              result.name = detection.class_ru || detection.class;
+            }
+
+            return result;
+          })
+          .filter((bbox): bbox is BBox => bbox !== null);
+
+        if (existingBboxes.length > 0) {
+          console.log('📥 Загружено существующих аннотаций:', existingBboxes.length);
+          setBboxes(existingBboxes);
+        }
+      };
+
+      if (image.complete && image.naturalWidth > 0 && image.naturalHeight > 0) {
+        loadExistingAnnotations();
+      } else {
+        const handleLoad = () => {
+          if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+            loadExistingAnnotations();
+          }
+        };
+        image.addEventListener('load', handleLoad);
+        return () => {
+          image.removeEventListener('load', handleLoad);
+        };
+      }
+    }
+  }, [existingDetections, imageUrl]);
 
   // Загружаем изображение и рисуем bbox на canvas
   useEffect(() => {
@@ -241,6 +317,19 @@ function ImageAnnotationTool({
         is_defect: bbox.is_defect !== false, // По умолчанию true
       }));
 
+      // Логируем для отладки
+      console.log('💾 Сохранение аннотаций:', {
+        totalBboxes: normalizedBboxes.length,
+        bboxes: normalizedBboxes.map(b => ({
+          name: b.name,
+          x: b.x,
+          y: b.y,
+          width: b.width,
+          height: b.height,
+          is_defect: b.is_defect
+        }))
+      });
+
       const response = await fetch(
         `${BFF_SERVICE_URL}/analysis/tasks/${taskId}/images/${imageId}/annotate`,
         {
@@ -295,25 +384,75 @@ function ImageAnnotationTool({
           <button
             onClick={handleSave}
             disabled={isSaving || bboxes.length === 0}
-            className="text-white rounded-[8px] whitespace-nowrap flex items-center justify-center gap-[4px] border border-white/60 transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:bg-white/10"
+            className="text-white rounded-[8px] whitespace-nowrap flex items-center justify-center gap-[4px] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
               padding: '11px 12.5px',
               fontWeight: 550,
-              boxShadow: '0 4px 12px rgba(16, 185, 129, 0.4), 0 2px 4px rgba(16, 185, 129, 0.2)'
+              backgroundColor: 'rgba(16, 185, 129, 0.3)',
+              border: '1px solid rgba(16, 185, 129, 0.5)',
+              boxShadow: 'inset 0 2px 8px rgba(16, 185, 129, 0.3), inset 0 1px 3px rgba(16, 185, 129, 0.2), inset 0 -1px 0 rgba(0, 0, 0, 0.2)',
+            }}
+            onMouseEnter={(e) => {
+              if (!isSaving && bboxes.length > 0) {
+                e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.4)';
+                e.currentTarget.style.boxShadow = 'inset 0 2px 10px rgba(16, 185, 129, 0.4), inset 0 1px 4px rgba(16, 185, 129, 0.3), inset 0 -1px 0 rgba(0, 0, 0, 0.2)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.3)';
+              e.currentTarget.style.boxShadow = 'inset 0 2px 8px rgba(16, 185, 129, 0.3), inset 0 1px 3px rgba(16, 185, 129, 0.2), inset 0 -1px 0 rgba(0, 0, 0, 0.2)';
             }}
           >
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+              />
+            </svg>
             {isSaving ? 'Сохранение...' : 'Сохранить'}
           </button>
           <button
             onClick={() => setBboxes([])}
             disabled={bboxes.length === 0}
-            className="text-white rounded-[8px] whitespace-nowrap flex items-center justify-center gap-[4px] border border-white/60 transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:bg-white/10"
+            className="text-white rounded-[8px] whitespace-nowrap flex items-center justify-center gap-[4px] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
               padding: '11px 12.5px',
               fontWeight: 550,
-              boxShadow: 'inset 0 2px 8px rgba(239, 68, 68, 0.3), inset 0 1px 3px rgba(239, 68, 68, 0.2)'
+              backgroundColor: 'rgba(239, 68, 68, 0.3)',
+              border: '1px solid rgba(239, 68, 68, 0.5)',
+              boxShadow: 'inset 0 2px 8px rgba(239, 68, 68, 0.3), inset 0 1px 3px rgba(239, 68, 68, 0.2), inset 0 -1px 0 rgba(0, 0, 0, 0.2)',
+            }}
+            onMouseEnter={(e) => {
+              if (bboxes.length > 0) {
+                e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.4)';
+                e.currentTarget.style.boxShadow = 'inset 0 2px 10px rgba(239, 68, 68, 0.4), inset 0 1px 4px rgba(239, 68, 68, 0.3), inset 0 -1px 0 rgba(0, 0, 0, 0.2)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.3)';
+              e.currentTarget.style.boxShadow = 'inset 0 2px 8px rgba(239, 68, 68, 0.3), inset 0 1px 3px rgba(239, 68, 68, 0.2), inset 0 -1px 0 rgba(0, 0, 0, 0.2)';
             }}
           >
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+              />
+            </svg>
             Очистить все
           </button>
                     <button
@@ -395,7 +534,7 @@ function ImageAnnotationTool({
         </div>
 
         {/* Инструкция */}
-        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-20 bg-black/60 backdrop-blur-sm rounded-lg p-3 text-white text-sm text-center">
+        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-20 bg-black/80 backdrop-blur-sm rounded-lg p-3 text-base text-center" style={{ color: '#FFFFFF' }}>
           Зажмите левую кнопку мыши и перетащите для выделения области
         </div>
 
@@ -472,29 +611,53 @@ function ImageAnnotationTool({
                 </div>
               </div>
 
-              <div className="flex gap-2 justify-between">
+              <div className="flex flex-col gap-2">
                 <button
                   type="button"
                   onClick={handleCancelEdit}
-                  className="text-white rounded-[8px] whitespace-nowrap flex items-center justify-center gap-[4px] border border-white/60 transition-all hover:bg-white/10"
+                  className="text-white rounded-[8px] w-full flex items-center justify-center gap-[4px] transition-all border border-white hover:bg-white/10"
                   style={{
                     padding: '11px 12.5px',
                     fontWeight: 550,
-                    boxShadow: '0 4px 12px rgba(239, 68, 68, 0.4), 0 2px 4px rgba(239, 68, 68, 0.2)'
                   }}
                 >
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
                   Отмена
                 </button>
                 <button
                   type="button"
                   onClick={handleSaveName}
-                  className="text-white rounded-[8px] whitespace-nowrap flex items-center justify-center gap-[4px] border border-white/60 transition-all hover:bg-white/10"
+                  className="text-white rounded-[8px] w-full flex items-center justify-center gap-[4px] transition-all border border-white hover:bg-white/10"
                   style={{
                     padding: '11px 12.5px',
                     fontWeight: 550,
-                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.4), 0 2px 4px rgba(16, 185, 129, 0.2)'
                   }}
                 >
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M5 13l4 4L19 7"
+                    />
+                  </svg>
                   Сохранить
                 </button>
               </div>

@@ -379,8 +379,15 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
       >
         {/* Кнопка удалить */}
         <button
-          onClick={() => removeFile(selectedImageForView.id)}
-          className="absolute top-8 right-8 z-10 p-3 transition-colors"
+          onClick={() => {
+            if (!loading && !analysisProgress) {
+              removeFile(selectedImageForView.id);
+            }
+          }}
+          disabled={loading || !!analysisProgress}
+          className={`absolute top-8 right-8 z-10 p-3 transition-colors ${
+            loading || analysisProgress ? 'opacity-50 cursor-not-allowed' : 'hover:bg-white/10'
+          }`}
           aria-label="Удалить"
         >
           <svg
@@ -508,6 +515,7 @@ export default function AnalysisContent({ onViewModeChange }: AnalysisContentPro
                     onRemoveImage={removeFile}
                     onLoadPreview={loadPreview}
                     fastDelete={true}
+                    disableDelete={loading || !!analysisProgress}
                   />
                 </div>
               )}

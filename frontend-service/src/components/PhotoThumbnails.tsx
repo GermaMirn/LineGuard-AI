@@ -17,6 +17,7 @@ interface PhotoThumbnailsProps {
   disableModal?: boolean; // Отключить переход в модалку при клике
   onSelect?: (index: number) => void; // Только выбор без перехода
   fastDelete?: boolean; // Быстрое удаление при наведении
+  disableDelete?: boolean; // Отключить удаление (например, во время анализа)
 }
 
 export default function PhotoThumbnails({
@@ -28,6 +29,7 @@ export default function PhotoThumbnails({
   disableModal = false,
   onSelect,
   fastDelete = false,
+  disableDelete = false,
 }: PhotoThumbnailsProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
@@ -76,7 +78,7 @@ export default function PhotoThumbnails({
     >
       {/* Фон с border-radius - псевдоэлемент через inline style не работает, используем абсолютный div */}
       <div
-        className="absolute inset-0 border-2 border-white/20 rounded-2xl bg-black/40 pointer-events-none"
+        className="absolute inset-0 border-2 border-white/20 rounded-2xl bg-black/60 pointer-events-none"
         style={{ zIndex: 0 }}
       />
 
@@ -92,6 +94,7 @@ export default function PhotoThumbnails({
           overflowX: 'auto',
           scrollbarWidth: 'none',
           msOverflowStyle: 'none',
+          position: 'relative',
         }}
       >
         {files.map((fileWithPreview, index) => {
@@ -110,11 +113,13 @@ export default function PhotoThumbnails({
               className="flex-shrink-0 flex flex-col items-center"
               style={{
                 width: '48px',
+                position: 'relative',
+                overflow: 'visible',
               }}
               onMouseEnter={() => setHoveredIndex(index)}
               onMouseLeave={() => setHoveredIndex(null)}
             >
-              <div className="relative" style={{ width: '48px', height: '48px', overflow: 'visible' }}>
+              <div className="relative" style={{ width: '48px', height: '48px', overflow: 'visible', position: 'relative' }}>
                 <div
                   className="absolute cursor-pointer transition-all"
                   style={{
@@ -152,22 +157,26 @@ export default function PhotoThumbnails({
                 </div>
 
                 {/* Кнопка удаления - показывается при наведении (fastDelete) или выделении, поверх всего */}
-                {(fastDelete ? isHovered : isSelected) && (
+                {(fastDelete ? isHovered : isSelected) && !disableDelete && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      onRemoveImage(fileWithPreview.id);
+                      if (!disableDelete) {
+                        onRemoveImage(fileWithPreview.id);
+                      }
                     }}
-                    className="absolute w-6 h-6 bg-red-500 rounded-full flex items-center justify-center hover:bg-red-600 transition-colors"
+                    className="absolute w-5 h-5 bg-red-500 rounded-full flex items-center justify-center hover:bg-red-600 transition-colors shadow-lg"
                     style={{
-                      top: shouldEnlarge ? '-6px' : '-1px',
-                      right: shouldEnlarge ? '-6px' : '-1px',
-                      zIndex: 9999,
+                      top: shouldEnlarge ? '-4px' : '2px',
+                      right: shouldEnlarge ? '-4px' : '2px',
+                      zIndex: 10000,
+                      position: 'absolute',
                     }}
                     aria-label="Удалить"
+                    disabled={disableDelete}
                   >
                     <svg
-                      className="w-4 h-4 text-white"
+                      className="w-3 h-3 text-white"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -175,7 +184,7 @@ export default function PhotoThumbnails({
                       <path
                         strokeLinecap="round"
                         strokeLinejoin="round"
-                        strokeWidth={2}
+                        strokeWidth={3}
                         d="M6 18L18 6M6 6l12 12"
                       />
                     </svg>

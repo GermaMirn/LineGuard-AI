@@ -26,7 +26,7 @@ ENV PORT=8000
 ENV TORCH_ALLOW_UNSAFE_LOAD=1
 
 # Healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+HEALTHCHECK --interval=60s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Запуск сервиса

@@ -296,6 +296,7 @@ async def get_task_images(
             manual_count = len([d for d in detections if d.get("is_manual")])
             if manual_count > 0:
                 logger.info(f"📤 Returning image {img.id} with {len(detections)} detections ({manual_count} manual)")
+                logger.info(f"📋 Manual detections details: {[d.get('class_ru', d.get('class', 'unknown')) for d in detections if d.get('is_manual')]}")
 
     # Если запрошены thumbnails, загружаем их batch'ом
     thumbnails_data = {}
@@ -639,8 +640,15 @@ async def annotate_image(
 
                     # Объединяем существующие детекции с ручными
                     # Удаляем старые ручные детекции (с is_manual=True) и добавляем новые
+                    # ВАЖНО: request.bboxes должен содержать ВСЕ маски (старые + новые), так как фронтенд загружает существующие
                     filtered_detections = [d for d in existing_detections if not d.get("is_manual", False)]
                     all_detections = filtered_detections + manual_detections
+
+                    # Логируем для отладки
+                    logger.info(f"📦 Request bboxes count: {len(request.bboxes)}")
+                    logger.info(f"🔄 Existing detections: {len(existing_detections)} (manual: {len([d for d in existing_detections if d.get('is_manual')])})")
+                    logger.info(f"✨ New manual detections: {len(manual_detections)}")
+                    logger.info(f"📊 Total detections after merge: {len(all_detections)} (manual: {len(manual_detections)})")
 
                     # Обновляем счетчики
                     total_objects = len(all_detections)

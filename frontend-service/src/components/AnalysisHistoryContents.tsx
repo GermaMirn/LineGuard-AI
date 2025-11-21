@@ -1027,6 +1027,7 @@ export default function AnalysisHistoryContents({
             taskId={taskId}
             fileId={selectedImageForView.result_file_id || selectedImageForView.file_id}
             projectId={taskId}
+            existingDetections={selectedImageForView.summary?.detections || []}
             onClose={() => setIsAnnotationMode(false)}
             onSave={() => {
               // После сохранения можно обновить изображение

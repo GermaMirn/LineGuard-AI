@@ -21,7 +21,7 @@ interface MetricsCardProps {
 
 const MetricsCard = memo(({ metric, index }: MetricsCardProps) => {
   // Определяем тип и severity дефекта
-  const isDefect = metric.defect_type && 
+  const isDefect = metric.defect_type &&
                    metric.defect_type !== 'normal' &&
                    metric.severity !== 'none' &&
                    metric.severity !== null;
@@ -32,7 +32,7 @@ const MetricsCard = memo(({ metric, index }: MetricsCardProps) => {
   const metadata = getDefectMetadata(severity, Boolean(isDefect));
   const defectType = getDefectType(
     metric.class_name_ru || metric.class_name,
-    metric.defect_type === 'damage' ? 'Повреждение' : 
+    metric.defect_type === 'damage' ? 'Повреждение' :
     metric.defect_type === 'missing' ? 'Отсутствие' : 'Норма'
   );
   const defectTypeName = getDefectTypeName(defectType);
@@ -74,9 +74,6 @@ const MetricsCard = memo(({ metric, index }: MetricsCardProps) => {
             <h4 className="text-base font-semibold text-white truncate">
               {metric.class_name_ru || metric.class_name}
             </h4>
-            {metric.is_manual && (
-              <span className="text-xs text-white/50 italic">Ручная аннотация</span>
-            )}
           </div>
         </div>
 
@@ -107,7 +104,7 @@ const MetricsCard = memo(({ metric, index }: MetricsCardProps) => {
             </p>
             {metric.description && (
               <p className="text-xs text-white/70 mt-1">
-                {metric.description}
+                {/* {metric.description} */}
               </p>
             )}
           </div>
@@ -117,7 +114,7 @@ const MetricsCard = memo(({ metric, index }: MetricsCardProps) => {
         {metric.is_manual && (
           <div className="pt-2 border-t border-white/10">
             <p className="text-xs text-white/60 italic">
-              ✏️ Ручная аннотация
+              Ручная аннотация
             </p>
           </div>
         )}
