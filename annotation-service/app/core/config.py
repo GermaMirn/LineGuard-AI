@@ -4,7 +4,7 @@ from typing import Optional
 
 class Settings(BaseSettings):
     # Files service URL
-    FILES_SERVICE_URL: str = "http://files-service:8000"
+    FILES_SERVICE_URL: str = "http://files-service:8006"
     
     # Service settings
     SERVICE_NAME: str = "annotation-service"
@@ -21,5 +21,7 @@ class Settings(BaseSettings):
 
 def get_settings() -> Settings:
     return Settings()
+
+
 
 

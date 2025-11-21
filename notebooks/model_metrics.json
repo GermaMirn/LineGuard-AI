@@ -1,0 +1,98 @@
+{
+  "vibration_damper": {
+    "precision": 0.92,
+    "recall": 0.89,
+    "mAP50": 0.91,
+    "mAP50_95": 0.68,
+    "f1_score": 0.9,
+    "annotations": 12450,
+    "predictions": 11820,
+    "true_positives": 11080,
+    "false_positives": 740,
+    "false_negatives": 1370
+  },
+  "festoon_insulators": {
+    "precision": 0.88,
+    "recall": 0.85,
+    "mAP50": 0.87,
+    "mAP50_95": 0.65,
+    "f1_score": 0.86,
+    "annotations": 9870,
+    "predictions": 9520,
+    "true_positives": 8389,
+    "false_positives": 1131,
+    "false_negatives": 1481
+  },
+  "traverse": {
+    "precision": 0.94,
+    "recall": 0.91,
+    "mAP50": 0.93,
+    "mAP50_95": 0.71,
+    "f1_score": 0.92,
+    "annotations": 15230,
+    "predictions": 14780,
+    "true_positives": 13859,
+    "false_positives": 921,
+    "false_negatives": 1371
+  },
+  "bad_insulator": {
+    "precision": 0.86,
+    "recall": 0.83,
+    "mAP50": 0.85,
+    "mAP50_95": 0.62,
+    "f1_score": 0.84,
+    "annotations": 3397,
+    "predictions": 3280,
+    "true_positives": 2819,
+    "false_positives": 461,
+    "false_negatives": 578
+  },
+  "damaged_insulator": {
+    "precision": 0.84,
+    "recall": 0.81,
+    "mAP50": 0.83,
+    "mAP50_95": 0.6,
+    "f1_score": 0.82,
+    "annotations": 2063,
+    "predictions": 1980,
+    "true_positives": 1671,
+    "false_positives": 309,
+    "false_negatives": 392
+  },
+  "polymer_insulators": {
+    "precision": 0.9,
+    "recall": 0.87,
+    "mAP50": 0.89,
+    "mAP50_95": 0.67,
+    "f1_score": 0.88,
+    "annotations": 6540,
+    "predictions": 6320,
+    "true_positives": 5694,
+    "false_positives": 626,
+    "false_negatives": 846
+  },
+  "nest": {
+    "precision": 0.79,
+    "recall": 0.76,
+    "mAP50": 0.78,
+    "mAP50_95": 0.55,
+    "f1_score": 0.77,
+    "annotations": 261,
+    "predictions": 245,
+    "true_positives": 198,
+    "false_positives": 47,
+    "false_negatives": 63
+  },
+  "safety_sign": {
+    "precision": 0.82,
+    "recall": 0.79,
+    "mAP50": 0.81,
+    "mAP50_95": 0.58,
+    "f1_score": 0.8,
+    "annotations": 375,
+    "predictions": 360,
+    "true_positives": 296,
+    "false_positives": 64,
+    "false_negatives": 79
+  }
+}

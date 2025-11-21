@@ -1,7 +1,7 @@
 import httpx
 import io
 from PIL import Image, ImageDraw, ImageFont
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from fastapi import HTTPException, status
 from app.core.config import get_settings
 from pydantic import BaseModel
@@ -14,6 +14,8 @@ class BBox(BaseModel):
     y: int
     width: int
     height: int
+    name: Optional[str] = None
+    is_defect: Optional[bool] = True  # По умолчанию повреждение
 
 
 class AnnotationService:
@@ -142,6 +144,15 @@ class AnnotationService:
             # Создаем объект для рисования
             draw = ImageDraw.Draw(image)
 
+            # Загружаем шрифт для текста (если доступен)
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+            except:
+                try:
+                    font = ImageFont.truetype("arial.ttf", 16)
+                except:
+                    font = ImageFont.load_default()
+
             # Рисуем каждый bbox
             for bbox in bboxes:
                 # Координаты прямоугольника
@@ -150,13 +161,54 @@ class AnnotationService:
                 right = bbox.x + bbox.width
                 bottom = bbox.y + bbox.height
 
+                # Определяем цвет рамки в зависимости от типа объекта
+                is_defect = bbox.is_defect if bbox.is_defect is not None else True
+                bbox_color = (239, 68, 68) if is_defect else (16, 185, 129)  # Красный для дефекта, зеленый для нормы
+
                 # Рисуем прямоугольник с нужной толщиной
                 # Используем несколько прямоугольников для создания эффекта толщины
                 for i in range(self.bbox_thickness):
                     offset = i - (self.bbox_thickness // 2)
                     draw.rectangle(
                         [left + offset, top + offset, right - offset, bottom - offset],
-                        outline=self.bbox_color
+                        outline=bbox_color
+                    )
+
+                # Рисуем название маски, если есть
+                if bbox.name:
+                    # Определяем цвет в зависимости от типа
+                    is_defect = bbox.is_defect if bbox.is_defect is not None else True
+                    bg_color = (239, 68, 68) if is_defect else (16, 185, 129)  # Красный для дефекта, зеленый для нормы
+                    
+                    # Получаем размер текста
+                    bbox_text = bbox.name
+                    try:
+                        bbox_text_bbox = draw.textbbox((0, 0), bbox_text, font=font)
+                        text_width = bbox_text_bbox[2] - bbox_text_bbox[0]
+                        text_height = bbox_text_bbox[3] - bbox_text_bbox[1]
+                    except:
+                        # Fallback если textbbox не доступен
+                        text_width = len(bbox_text) * 8
+                        text_height = 16
+
+                    # Рисуем фон для текста
+                    text_bg_left = left
+                    text_bg_top = max(0, top - text_height - 4)
+                    text_bg_right = left + text_width + 8
+                    text_bg_bottom = top
+
+                    # Рисуем непрозрачный фон для текста
+                    draw.rectangle(
+                        [text_bg_left, text_bg_top, text_bg_right, text_bg_bottom],
+                        fill=bg_color
+                    )
+
+                    # Рисуем текст
+                    draw.text(
+                        (left + 4, text_bg_top + 2),
+                        bbox_text,
+                        fill=(255, 255, 255),  # Белый текст
+                        font=font
                     )
 
             # Сохраняем изображение в байты

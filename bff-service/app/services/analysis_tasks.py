@@ -156,7 +156,10 @@ async def update_image(
     if status is not None:
         image.status = status
     if summary is not None:
-        image.summary = summary
+        # Принудительно обновляем summary - создаем новый объект для принудительного обновления
+        # Это критично для JSON полей в SQLAlchemy - они не обновляются если ссылка не меняется
+        import copy
+        image.summary = copy.deepcopy(summary) if isinstance(summary, dict) else summary
     if is_preview is not None:
         image.is_preview = is_preview
     if result_file_id is not None:
@@ -166,6 +169,10 @@ async def update_image(
 
     image.updated_at = datetime.utcnow()
     session.add(image)
+    # Используем flag_modified для принудительного обновления JSON поля
+    from sqlalchemy.orm.attributes import flag_modified
+    if summary is not None:
+        flag_modified(image, "summary")
     await session.flush()
     return image
 

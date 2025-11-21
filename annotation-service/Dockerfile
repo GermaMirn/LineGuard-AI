@@ -1,11 +1,12 @@
-FROM python:3.11-slim
+FROM python:3.11-slim as base
 
 WORKDIR /app
 
-# Установка системных зависимостей для Pillow
+# Установка системных зависимостей и шрифтов с поддержкой кириллицы
 RUN apt-get update && apt-get install -y \
-    libjpeg-dev \
-    zlib1g-dev \
+    curl \
+    fonts-dejavu \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 # Копирование requirements и установка зависимостей
@@ -15,10 +16,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копирование кода приложения
 COPY app/ ./app/
 
-# Порт для сервиса
+# Production stage
+FROM base as production
+
 EXPOSE 8000
 
-# Запуск приложения
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-
-

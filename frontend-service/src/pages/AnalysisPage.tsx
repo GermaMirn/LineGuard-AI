@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import AnalysisContent from "@/components/AnalysisContent";
@@ -38,12 +38,11 @@ export default function AnalysisPage() {
   const [isViewingImage, setIsViewingImage] = useState(false);
   const [routeName, setRouteName] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadTaskData = useCallback(async () => {
     if (!taskId) {
       return;
     }
 
-    const loadTaskData = async () => {
       try {
         setLoading(true);
         setError(null);
@@ -85,8 +84,10 @@ export default function AnalysisPage() {
           if (taskData.results_archive_file_id) {
             setResultsArchiveFileId(taskData.results_archive_file_id);
           }
-          setTaskImages(imagesData?.images || []);
+        const loadedImages = imagesData?.images || [];
+        setTaskImages(loadedImages);
           setTaskImagesTotal(imagesData?.total || 0);
+        
         } else {
           setError("Метаданные задачи не найдены");
         }
@@ -98,10 +99,11 @@ export default function AnalysisPage() {
       } finally {
         setLoading(false);
       }
-    };
-
-    loadTaskData();
   }, [taskId]);
+
+  useEffect(() => {
+    loadTaskData();
+  }, [loadTaskData]);
 
   return (
     <div className="h-screen bg-black text-white flex overflow-hidden relative">
@@ -294,7 +296,29 @@ export default function AnalysisPage() {
               onImageDeleted={(imageId: string) => {
                 // Удаляем изображение из локального состояния
                 setTaskImages((prevImages) => prevImages.filter((img) => img.id !== imageId));
-                setTaskImagesTotal((prevTotal) => Math.max(0, prevTotal - 1));
+                setTaskImagesTotal((prev) => prev - 1);
+              }}
+              onImageUpdated={async () => {
+                // Обновляем только конкретное изображение без полной перезагрузки
+                if (taskId) {
+                  try {
+                    const imagesResponse = await apiClient.get(`/analysis/tasks/${taskId}/images`, {
+                      params: {
+                        skip: 0,
+                        limit: 50,
+                        include_thumbnails: true,
+                      },
+                    });
+                    const imagesData = imagesResponse.data as {
+                      images: TaskImageResponse[];
+                      total: number;
+                    };
+                    setTaskImages(imagesData?.images || []);
+                    setTaskImagesTotal(imagesData?.total || 0);
+                  } catch (err) {
+                    console.error("Error updating image data:", err);
+                  }
+                }
               }}
               onViewModeChange={setIsViewingImage}
             />

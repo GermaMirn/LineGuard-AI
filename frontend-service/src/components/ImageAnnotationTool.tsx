@@ -1,6 +1,5 @@
 import { useState, useRef, useCallback, useEffect, memo } from 'react';
 import { motion } from 'framer-motion';
-import { Button } from '@heroui/react';
 
 interface BBox {
   id: string;
@@ -8,7 +7,8 @@ interface BBox {
   y: number;
   width: number;
   height: number;
-  label?: string;
+  name?: string;
+  is_defect?: boolean; // true = повреждение, false = нормальный объект
 }
 
 interface ImageAnnotationToolProps {
@@ -36,10 +36,14 @@ function ImageAnnotationTool({
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentBBox, setCurrentBBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [editingBBoxId, setEditingBBoxId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState<string>('');
+  const [editingIsDefect, setEditingIsDefect] = useState<boolean>(true); // По умолчанию повреждение
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const startPosRef = useRef<{ x: number; y: number } | null>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   // Загружаем изображение и рисуем bbox на canvas
   useEffect(() => {
@@ -56,15 +60,28 @@ function ImageAnnotationTool({
 
       // Рисуем все сохраненные bbox
       bboxes.forEach((bbox) => {
-        ctx.strokeStyle = '#EF4444';
+        const isDefect = bbox.is_defect !== false; // По умолчанию true
+        ctx.strokeStyle = isDefect ? '#EF4444' : '#10B981'; // Красный для дефекта, зеленый для нормы
         ctx.lineWidth = 2;
         ctx.strokeRect(bbox.x, bbox.y, bbox.width, bbox.height);
-        
-        // Рисуем метку если есть
-        if (bbox.label) {
-          ctx.fillStyle = '#EF4444';
-          ctx.font = '14px Arial';
-          ctx.fillText(bbox.label, bbox.x, bbox.y - 5);
+
+        // Рисуем название если есть
+        if (bbox.name) {
+          const bgColor = isDefect ? 'rgba(239, 68, 68, 0.8)' : 'rgba(16, 185, 129, 0.8)'; // Красный для дефекта, зеленый для нормы
+
+          ctx.font = 'bold 14px Arial';
+          const text = bbox.name;
+          const textMetrics = ctx.measureText(text);
+          const textWidth = textMetrics.width;
+          const textHeight = 16;
+
+          // Рисуем фон для текста
+          ctx.fillStyle = bgColor;
+          ctx.fillRect(bbox.x, bbox.y - textHeight - 2, textWidth + 8, textHeight + 4);
+
+          // Рисуем текст
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillText(text, bbox.x + 4, bbox.y - 5);
         }
       });
 
@@ -104,7 +121,7 @@ function ImageAnnotationTool({
 
     const rect = container.getBoundingClientRect();
     const imageRect = image.getBoundingClientRect();
-    
+
     const x = e.clientX - imageRect.left;
     const y = e.clientY - imageRect.top;
 
@@ -113,7 +130,7 @@ function ImageAnnotationTool({
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return; // Только левая кнопка мыши
-    
+
     const coords = getRelativeCoordinates(e);
     if (!coords) return;
 
@@ -151,7 +168,12 @@ function ImageAnnotationTool({
         width: currentBBox.width,
         height: currentBBox.height,
       };
+      // Временно добавляем bbox в список (будет удален при отмене)
       setBboxes([...bboxes, newBBox]);
+      // Открываем диалог для ввода названия и выбора типа
+      setEditingBBoxId(newBBox.id);
+      setEditingName('');
+      setEditingIsDefect(true); // По умолчанию повреждение
     }
 
     setIsDrawing(false);
@@ -161,18 +183,45 @@ function ImageAnnotationTool({
 
   const handleDeleteBBox = useCallback((id: string) => {
     setBboxes(bboxes.filter((bbox) => bbox.id !== id));
-  }, [bboxes]);
+    if (editingBBoxId === id) {
+      setEditingBBoxId(null);
+      setEditingName('');
+    }
+  }, [bboxes, editingBBoxId]);
+
+  const handleSaveName = useCallback(() => {
+    if (!editingBBoxId) return;
+
+    setBboxes(bboxes.map(bbox =>
+      bbox.id === editingBBoxId
+        ? { ...bbox, name: editingName.trim() || undefined, is_defect: editingIsDefect }
+        : bbox
+    ));
+    setEditingBBoxId(null);
+    setEditingName('');
+    setEditingIsDefect(true);
+  }, [editingBBoxId, editingName, editingIsDefect, bboxes]);
+
+  const handleCancelEdit = useCallback(() => {
+    // Удаляем bbox из списка при отмене
+    if (editingBBoxId) {
+      setBboxes(bboxes.filter(bbox => bbox.id !== editingBBoxId));
+    }
+    setEditingBBoxId(null);
+    setEditingName('');
+    setEditingIsDefect(true);
+  }, [editingBBoxId, bboxes]);
 
   const handleSave = async () => {
     if (bboxes.length === 0) {
-      alert('Добавьте хотя бы одну область для выделения');
+      // Не показываем alert, просто не сохраняем
       return;
     }
 
     setIsSaving(true);
     try {
       const BFF_SERVICE_URL = (import.meta as any).env?.VITE_BFF_SERVICE_URL || "/api";
-      
+
       // Получаем размеры изображения для нормализации координат
       const image = imageRef.current;
       if (!image) return;
@@ -188,6 +237,8 @@ function ImageAnnotationTool({
         y: Math.round((bbox.y / displayHeight) * imageHeight),
         width: Math.round((bbox.width / displayWidth) * imageWidth),
         height: Math.round((bbox.height / displayHeight) * imageHeight),
+        name: bbox.name || undefined,
+        is_defect: bbox.is_defect !== false, // По умолчанию true
       }));
 
       const response = await fetch(
@@ -214,22 +265,19 @@ function ImageAnnotationTool({
         onSave(bboxes);
       }
 
-      // Уведомляем о обновлении изображения СРАЗУ
-      if (onImageUpdated) {
-        onImageUpdated();
-      }
+      // Закрываем модалку сразу
+      onClose();
 
-      // Даем время на обновление версии изображения и перерендер компонента
-      // Затем закрываем модалку и показываем уведомление
-      setTimeout(() => {
-        // Показываем уведомление об успешном сохранении
-        alert('Области успешно сохранены!');
-        // Закрываем инструмент аннотации после обновления изображения
-        onClose();
-      }, 400);
+      // Уведомляем о обновлении изображения с небольшой задержкой
+      // чтобы дать время базе данных сохранить изменения
+      if (onImageUpdated) {
+        setTimeout(() => {
+          onImageUpdated();
+        }, 500);
+      }
     } catch (error) {
       console.error('Error saving annotations:', error);
-      alert('Не удалось сохранить области');
+      // Не показываем alert, просто логируем ошибку
     } finally {
       setIsSaving(false);
     }
@@ -244,29 +292,37 @@ function ImageAnnotationTool({
       >
         {/* Панель инструментов */}
         <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-20 flex gap-2 bg-black/60 backdrop-blur-sm rounded-lg p-2">
-          <Button
+          <button
             onClick={handleSave}
             disabled={isSaving || bboxes.length === 0}
-            className="bg-green-500 hover:bg-green-600 text-white"
-            size="sm"
+            className="text-white rounded-[8px] whitespace-nowrap flex items-center justify-center gap-[4px] border border-white/60 transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:bg-white/10"
+            style={{
+              padding: '11px 12.5px',
+              fontWeight: 550,
+              boxShadow: '0 4px 12px rgba(16, 185, 129, 0.4), 0 2px 4px rgba(16, 185, 129, 0.2)'
+            }}
           >
             {isSaving ? 'Сохранение...' : 'Сохранить'}
-          </Button>
-          <Button
-            onClick={onClose}
-            className="bg-gray-500 hover:bg-gray-600 text-white"
-            size="sm"
-          >
-            Отмена
-          </Button>
-          <Button
+          </button>
+          <button
             onClick={() => setBboxes([])}
             disabled={bboxes.length === 0}
-            className="bg-red-500 hover:bg-red-600 text-white"
-            size="sm"
+            className="text-white rounded-[8px] whitespace-nowrap flex items-center justify-center gap-[4px] border border-white/60 transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:bg-white/10"
+            style={{
+              padding: '11px 12.5px',
+              fontWeight: 550,
+              boxShadow: 'inset 0 2px 8px rgba(239, 68, 68, 0.3), inset 0 1px 3px rgba(239, 68, 68, 0.2)'
+            }}
           >
             Очистить все
-          </Button>
+          </button>
+                    <button
+            onClick={onClose}
+            className="text-white rounded-[8px] whitespace-nowrap flex items-center justify-center gap-[4px] border border-white/60 transition-all hover:bg-white/10"
+            style={{ padding: '11px 12.5px', fontWeight: 550 }}
+          >
+            Отмена
+          </button>
         </div>
 
         {/* Информация о количестве bbox */}
@@ -277,13 +333,16 @@ function ImageAnnotationTool({
         {/* Контейнер с изображением и canvas */}
         <div
           ref={containerRef}
-          className="flex-1 flex items-center justify-center overflow-auto p-4"
+          className="flex-1 flex items-center justify-center overflow-auto p-4 relative"
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
           style={{ cursor: isDrawing ? 'crosshair' : 'default' }}
         >
+          {/* Затемнение справа */}
+          <div className="absolute right-0 top-0 bottom-0 w-32 bg-gradient-to-l from-black/40 to-transparent pointer-events-none z-10" />
+
           <div className="relative inline-block">
             <img
               key={`annotation-${imageUrl}`}
@@ -308,13 +367,21 @@ function ImageAnnotationTool({
                 // Перерисовываем bboxes
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 bboxes.forEach((bbox) => {
-                  ctx.strokeStyle = '#EF4444';
+                  const isDefect = bbox.is_defect !== false; // По умолчанию true
+                  ctx.strokeStyle = isDefect ? '#EF4444' : '#10B981'; // Красный для дефекта, зеленый для нормы
                   ctx.lineWidth = 2;
                   ctx.strokeRect(bbox.x, bbox.y, bbox.width, bbox.height);
-                  if (bbox.label) {
-                    ctx.fillStyle = '#EF4444';
-                    ctx.font = '14px Arial';
-                    ctx.fillText(bbox.label, bbox.x, bbox.y - 5);
+                  if (bbox.name) {
+                    const bgColor = isDefect ? 'rgba(239, 68, 68, 0.8)' : 'rgba(16, 185, 129, 0.8)';
+                    ctx.fillStyle = bgColor;
+                    ctx.font = 'bold 14px Arial';
+                    const text = bbox.name;
+                    const textMetrics = ctx.measureText(text);
+                    const textWidth = textMetrics.width;
+                    const textHeight = 16;
+                    ctx.fillRect(bbox.x, bbox.y - textHeight - 2, textWidth + 8, textHeight + 4);
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillText(text, bbox.x + 4, bbox.y - 5);
                   }
                 });
               }}
@@ -331,6 +398,109 @@ function ImageAnnotationTool({
         <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-20 bg-black/60 backdrop-blur-sm rounded-lg p-3 text-white text-sm text-center">
           Зажмите левую кнопку мыши и перетащите для выделения области
         </div>
+
+        {/* Диалог для ввода названия маски */}
+        {editingBBoxId && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/80">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-gray-700"
+            >
+              <h3 className="text-white text-lg font-semibold mb-4">
+                Введите название маски
+              </h3>
+              <input
+                ref={nameInputRef}
+                type="text"
+                value={editingName}
+                onChange={(e) => setEditingName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleSaveName();
+                  } else if (e.key === 'Escape') {
+                    handleCancelEdit();
+                  }
+                }}
+                placeholder="Например: Поврежденный изолятор"
+                className={`w-full px-4 py-2 bg-gray-700 text-white rounded-lg border mb-4 focus:outline-none focus:ring-2 transition-colors ${
+                  editingIsDefect
+                    ? 'border-gray-600 focus:border-red-500 focus:ring-red-500'
+                    : 'border-gray-600 focus:border-green-500 focus:ring-green-500'
+                }`}
+                autoFocus
+              />
+
+              {/* Выбор типа объекта */}
+              <div className="mb-4">
+                <label className="text-white text-sm font-medium mb-2 block">
+                  Тип объекта:
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingIsDefect(true)}
+                    className={`flex-1 px-4 py-2 rounded-lg border-2 transition-all ${
+                      editingIsDefect
+                        ? 'bg-red-500/20 border-red-500 text-red-300'
+                        : 'bg-gray-700 border-gray-600 text-white/60 hover:border-gray-500'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center gap-2">
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                      <span>Повреждение</span>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingIsDefect(false)}
+                    className={`flex-1 px-4 py-2 rounded-lg border-2 transition-all ${
+                      !editingIsDefect
+                        ? 'bg-green-500/20 border-green-500 text-green-300'
+                        : 'bg-gray-700 border-gray-600 text-white/60 hover:border-gray-500'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center gap-2">
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span>Норма</span>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex gap-2 justify-between">
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  className="text-white rounded-[8px] whitespace-nowrap flex items-center justify-center gap-[4px] border border-white/60 transition-all hover:bg-white/10"
+                  style={{
+                    padding: '11px 12.5px',
+                    fontWeight: 550,
+                    boxShadow: '0 4px 12px rgba(239, 68, 68, 0.4), 0 2px 4px rgba(239, 68, 68, 0.2)'
+                  }}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveName}
+                  className="text-white rounded-[8px] whitespace-nowrap flex items-center justify-center gap-[4px] border border-white/60 transition-all hover:bg-white/10"
+                  style={{
+                    padding: '11px 12.5px',
+                    fontWeight: 550,
+                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.4), 0 2px 4px rgba(16, 185, 129, 0.2)'
+                  }}
+                >
+                  Сохранить
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
       </motion.div>
     </div>
   );

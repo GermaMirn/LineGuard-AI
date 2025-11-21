@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, status
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
 from app.services.annotation_service import AnnotationService
 from app.core.config import get_settings
@@ -14,6 +14,8 @@ class BBox(BaseModel):
     y: int
     width: int
     height: int
+    name: Optional[str] = None
+    is_defect: Optional[bool] = True  # По умолчанию повреждение
 
 
 class AnnotationRequest(BaseModel):

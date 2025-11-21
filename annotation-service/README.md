@@ -46,3 +46,5 @@
 - `FILES_SERVICE_URL` - URL сервиса файлов (по умолчанию: `http://files-service:8000`)
 
 
+
+

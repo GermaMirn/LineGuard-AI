@@ -287,6 +287,16 @@ async def get_task_images(
 
     images, total = await analysis_tasks_service.get_task_images(session, task_id, skip=skip, limit=limit)
 
+    # Логируем для отладки - проверяем наличие summary с detections
+    import logging
+    logger = logging.getLogger(__name__)
+    for img in images:
+        if img.summary and img.summary.get("detections"):
+            detections = img.summary.get("detections", [])
+            manual_count = len([d for d in detections if d.get("is_manual")])
+            if manual_count > 0:
+                logger.info(f"📤 Returning image {img.id} with {len(detections)} detections ({manual_count} manual)")
+
     # Если запрошены thumbnails, загружаем их batch'ом
     thumbnails_data = {}
     if include_thumbnails and images:
@@ -472,6 +482,8 @@ class BBox(BaseModel):
     y: int
     width: int
     height: int
+    name: Optional[str] = None
+    is_defect: Optional[bool] = True  # По умолчанию повреждение
 
 
 class AnnotationRequest(BaseModel):
@@ -479,6 +491,28 @@ class AnnotationRequest(BaseModel):
     bboxes: List[BBox]
     project_id: str
     file_type: str = "ANALYSIS_RESULT"
+
+
+class ImageMetric(BaseModel):
+    """Метрика для одного объекта на изображении"""
+    detection_id: Optional[str] = None  # ID детекции, если привязана к ней
+    class_name: str  # Название класса объекта
+    class_name_ru: Optional[str] = None  # Название класса на русском
+    confidence: float  # Уверенность модели (0-1)
+    bbox: List[float]  # Координаты bbox [x1, y1, x2, y2]
+    defect_type: Optional[str] = None  # Тип дефекта: "damage", "missing", "normal"
+    severity: Optional[str] = None  # Серьезность: "high", "medium", "low", "none"
+    description: Optional[str] = None  # Описание дефекта
+    is_manual: bool = False  # Ручная аннотация
+
+
+class ImageMetricsRequest(BaseModel):
+    """Запрос на сохранение метрик изображения"""
+    metrics: List[ImageMetric]  # Список метрик
+    total_objects: Optional[int] = None  # Общее количество объектов
+    defects_count: Optional[int] = None  # Количество дефектов
+    has_defects: Optional[bool] = None  # Есть ли дефекты
+    statistics: Optional[dict] = None  # Статистика по классам
 
 
 @router.post("/analysis/tasks/{task_id}/images/{image_id}/annotate")
@@ -548,19 +582,117 @@ async def annotate_image(
             # Обновляем result_file_id в базе данных новым file_id из результата
             # annotation-service возвращает "file_id" в ответе
             new_file_id = result.get("file_id")
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Annotate result: file_id={new_file_id}, image_id={image_id}")
+
             if new_file_id:
                 try:
+                    # Получаем текущий summary или создаем новый
+                    current_summary = image.summary or {}
+
+                    # Получаем существующие детекции или создаем пустой список
+                    existing_detections = current_summary.get("detections", [])
+
+                    # Сохраняем аннотации с названиями в summary
+                    annotations = []
+                    manual_detections = []
+
+                    for bbox in request.bboxes:
+                        annotation = {
+                            "x": bbox.x,
+                            "y": bbox.y,
+                            "width": bbox.width,
+                            "height": bbox.height,
+                        }
+                        if bbox.name:
+                            annotation["name"] = bbox.name
+                        annotation["is_defect"] = bbox.is_defect if bbox.is_defect is not None else True
+                        annotations.append(annotation)
+
+                        # Преобразуем ручную аннотацию в формат детекции
+                        is_defect = bbox.is_defect if bbox.is_defect is not None else True
+                        # Формат bbox: [x1, y1, x2, y2] (абсолютные координаты)
+                        x1, y1 = bbox.x, bbox.y
+                        x2, y2 = bbox.x + bbox.width, bbox.y + bbox.height
+                        bbox_area = bbox.width * bbox.height
+
+                        manual_detection = {
+                            "class": bbox.name or "Ручная аннотация",
+                            "class_ru": bbox.name or "Ручная аннотация",
+                            "confidence": 1.0,  # 100% уверенность для ручных аннотаций
+                            "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                            "bbox_size": {
+                                "width": bbox.width,
+                                "height": bbox.height,
+                                "area": bbox_area,
+                                "is_small": bbox.width < 30 or bbox.height < 30
+                            },
+                            "defect_summary": {
+                                "type": "Повреждение" if is_defect else "Норма",
+                                "severity": "high" if is_defect else "none",
+                                "description": "Ручная аннотация"
+                            },
+                            "is_manual": True  # Метка что это ручная аннотация
+                        }
+                        manual_detections.append(manual_detection)
+
+                    # Объединяем существующие детекции с ручными
+                    # Удаляем старые ручные детекции (с is_manual=True) и добавляем новые
+                    filtered_detections = [d for d in existing_detections if not d.get("is_manual", False)]
+                    all_detections = filtered_detections + manual_detections
+
+                    # Обновляем счетчики
+                    total_objects = len(all_detections)
+                    defects_count = sum(1 for d in all_detections if (
+                        d.get("defect_summary", {}).get("type") != "Норма" and
+                        d.get("defect_summary", {}).get("severity") not in ["none", None]
+                    ))
+
+                    # Обновляем summary - ВАЖНО: создаем новый словарь для принудительного обновления
+                    current_summary = {
+                        **current_summary,  # Сохраняем существующие данные
+                        "detections": all_detections,  # Обновляем детекции (включая ручные)
+                        "manual_annotations": annotations,  # Сохраняем для обратной совместимости
+                        "has_manual_annotations": len(annotations) > 0,
+                        "total_objects": total_objects,
+                        "defects_count": defects_count,
+                        "has_defects": defects_count > 0
+                    }
+
+                    # Логируем для отладки
+                    logger.info(f"🔄 Updating image {image_id} summary: total_objects={total_objects}, defects_count={defects_count}, manual_detections={len(manual_detections)}")
+                    logger.info(f"📊 Summary detections count: {len(all_detections)}, manual: {len(manual_detections)}")
+                    logger.info(f"📝 Manual detections: {[d.get('class_ru', d.get('class', 'unknown')) for d in manual_detections]}")
+                    logger.info(f"💾 Saving summary with {len(all_detections)} detections to DB")
+                    logger.info(f"🔍 Sample detection: {manual_detections[0] if manual_detections else 'None'}")
+
+                    # ВАЖНО: Создаем новый объект summary для принудительного обновления JSON поля
+                    import copy
+                    summary_to_save = copy.deepcopy(current_summary)
+
                     await analysis_tasks_service.update_image(
                         db,
                         image_id,
-                        result_file_id=UUID(new_file_id)
+                        result_file_id=UUID(new_file_id),
+                        summary=summary_to_save
                     )
                     await db.commit()
+                    logger.info(f"✅ Summary saved to DB for image {image_id}")
+
+                    # Проверяем, что данные сохранились
+                    updated_image = await analysis_tasks_service.get_image(db, image_id)
+                    if updated_image and updated_image.summary:
+                        saved_detections = updated_image.summary.get("detections", [])
+                        saved_manual = [d for d in saved_detections if d.get("is_manual")]
+                        logger.info(f"✅ Verified saved: {len(saved_detections)} detections, {len(saved_manual)} manual")
+                    else:
+                        logger.warning(f"⚠️ Image {image_id} summary is None after save")
                 except Exception as e:
                     # Логируем ошибку, но не прерываем выполнение
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.error(f"Failed to update image result_file_id: {str(e)}")
+                    logger.error(f"❌ Failed to update image result_file_id: {str(e)}", exc_info=True)
+            else:
+                logger.warning(f"⚠️ No file_id in annotation result for image {image_id}")
 
             return result
 
@@ -575,5 +707,173 @@ async def annotate_image(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to annotate image: {str(e)}"
+        )
+
+
+@router.post("/analysis/tasks/{task_id}/images/{image_id}/metrics")
+async def save_image_metrics(
+    task_id: UUID,
+    image_id: UUID,
+    request: ImageMetricsRequest,
+    db: AsyncSession = Depends(get_db_session)
+):
+    """
+    Сохранить метрики для изображения
+
+    - **task_id**: ID задачи
+    - **image_id**: ID изображения
+    - **request**: Данные метрик (metrics, total_objects, defects_count, etc.)
+    """
+    try:
+        # Проверяем, что задача существует
+        task = await analysis_tasks_service.get_task(db, task_id)
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found"
+            )
+
+        # Проверяем, что изображение существует и принадлежит задаче
+        image = await analysis_tasks_service.get_image(db, image_id, task_id=task_id)
+        if not image:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Image not found or does not belong to this task"
+            )
+
+        # Преобразуем метрики в формат детекций для совместимости
+        detections = []
+        for metric in request.metrics:
+            detection = {
+                "class": metric.class_name,
+                "class_ru": metric.class_name_ru or metric.class_name,
+                "confidence": metric.confidence,
+                "bbox": metric.bbox,
+                "bbox_size": {
+                    "width": int(metric.bbox[2] - metric.bbox[0]) if len(metric.bbox) >= 4 else 0,
+                    "height": int(metric.bbox[3] - metric.bbox[1]) if len(metric.bbox) >= 4 else 0,
+                    "area": int((metric.bbox[2] - metric.bbox[0]) * (metric.bbox[3] - metric.bbox[1])) if len(metric.bbox) >= 4 else 0,
+                    "is_small": False
+                },
+                "defect_summary": {
+                    "type": "Повреждение" if metric.defect_type in ["damage", "missing"] else "Норма",
+                    "severity": metric.severity or ("high" if metric.defect_type in ["damage", "missing"] else "none"),
+                    "description": metric.description or ""
+                },
+                "is_manual": metric.is_manual
+            }
+            if metric.detection_id:
+                detection["detection_id"] = metric.detection_id
+            detections.append(detection)
+
+        # Получаем текущий summary или создаем новый
+        current_summary = image.summary or {}
+
+        # Обновляем summary с новыми метриками
+        updated_summary = {
+            **current_summary,
+            "detections": detections,
+            "total_objects": request.total_objects or len(detections),
+            "defects_count": request.defects_count or sum(1 for m in request.metrics if m.defect_type in ["damage", "missing"]),
+            "has_defects": request.has_defects if request.has_defects is not None else (request.defects_count or 0) > 0,
+            "statistics": request.statistics or current_summary.get("statistics", {})
+        }
+
+        # Сохраняем обновленный summary
+        await analysis_tasks_service.update_image(
+            db,
+            image_id,
+            summary=updated_summary
+        )
+        await db.commit()
+
+        return {
+            "image_id": str(image_id),
+            "metrics_count": len(detections),
+            "total_objects": updated_summary["total_objects"],
+            "defects_count": updated_summary["defects_count"],
+            "has_defects": updated_summary["has_defects"]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save metrics: {str(e)}"
+        )
+
+
+@router.get("/analysis/tasks/{task_id}/images/{image_id}/metrics")
+async def get_image_metrics(
+    task_id: UUID,
+    image_id: UUID,
+    db: AsyncSession = Depends(get_db_session)
+):
+    """
+    Получить метрики для изображения
+
+    - **task_id**: ID задачи
+    - **image_id**: ID изображения
+    """
+    try:
+        # Проверяем, что задача существует
+        task = await analysis_tasks_service.get_task(db, task_id)
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found"
+            )
+
+        # Проверяем, что изображение существует и принадлежит задаче
+        image = await analysis_tasks_service.get_image(db, image_id, task_id=task_id)
+        if not image:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Image not found or does not belong to this task"
+            )
+
+        # Извлекаем метрики из summary
+        summary = image.summary or {}
+        detections = summary.get("detections", [])
+
+        # Преобразуем детекции в формат метрик
+        metrics = []
+        for detection in detections:
+            defect_summary = detection.get("defect_summary", {})
+            defect_type = None
+            if defect_summary.get("type") != "Норма":
+                defect_type = "damage" if "повреж" in defect_summary.get("type", "").lower() else "missing"
+            else:
+                defect_type = "normal"
+
+            metric = ImageMetric(
+                detection_id=detection.get("detection_id"),
+                class_name=detection.get("class", ""),
+                class_name_ru=detection.get("class_ru", detection.get("class", "")),
+                confidence=detection.get("confidence", 0.0),
+                bbox=detection.get("bbox", []),
+                defect_type=defect_type,
+                severity=defect_summary.get("severity"),
+                description=defect_summary.get("description"),
+                is_manual=detection.get("is_manual", False)
+            )
+            metrics.append(metric)
+
+        return {
+            "image_id": str(image_id),
+            "metrics": [m.dict() for m in metrics],
+            "total_objects": summary.get("total_objects", len(metrics)),
+            "defects_count": summary.get("defects_count", 0),
+            "has_defects": summary.get("has_defects", False),
+            "statistics": summary.get("statistics", {})
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get metrics: {str(e)}"
         )
 
